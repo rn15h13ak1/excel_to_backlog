@@ -174,7 +174,7 @@ def process_source(
         return counts
 
     # ---- マッパー初期化 ----
-    mapper = IssueMapper(mapping_cfg, master)
+    mapper = IssueMapper(mapping_cfg, master, headers=headers)
 
     # ---- ドライラン ----
     if dry_run:

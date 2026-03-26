@@ -100,11 +100,16 @@ class IssueMapper:
         custom_fields       : list  カスタム属性マッピングリスト
             - field_name    : str   Backlog カスタム属性名
               col_name      : str   Excel 列名
+    description_format : str  "template"（デフォルト）または "auto"
+        "auto" の場合は description_template を無視し、excel_md_tool と同じ形式で
+        列名を見出し・セル値を本文として自動生成する。
+    description_cols   : list  "auto" 時に出力する列名リスト（省略時: 全列）
     """
 
-    def __init__(self, mapping_config: dict, master: BacklogMaster):
+    def __init__(self, mapping_config: dict, master: BacklogMaster, headers: list[str] = None):
         self.cfg = mapping_config
         self.master = master
+        self.headers = headers or []  # auto モードでの列順序に使用
 
     # ------------------------------------------------------------------
     # テンプレート処理
@@ -121,6 +126,51 @@ class IssueMapper:
             return row.get(col, m.group(0))  # 未マッチはそのまま
 
         return re.sub(r"\{\{(.+?)\}\}", replacer, template)
+
+    def _render_auto(self, row: dict[str, str]) -> str:
+        """
+        excel_md_tool (MarkdownEditor.tsx) と同じ形式で Markdown を生成する。
+
+        仕様:
+          - description_cols が指定されていればその列のみ、省略時は全列を出力
+          - 列名を # 見出し（複数行ヘッダーは " / " で階層化: 1段目=#, 2段目=##）
+          - セル値を本文として見出しの直後に出力
+          - セル内の改行（\\n / \\r\\n）は <br> に変換
+          - 空セルは「（値なし）」を出力
+        """
+        # 出力する列を決定（description_cols 指定 > headers の順序 > row のキー順）
+        specified = self.cfg.get("description_cols")
+        if specified:
+            cols = specified
+        elif self.headers:
+            cols = self.headers
+        else:
+            cols = list(row.keys())
+
+        parts = []
+        for header in cols:
+            if header not in row:
+                continue
+
+            # 複数行ヘッダーを " / " で分割して階層見出しを生成
+            # 例: "大分類 / 小分類" → "# 大分類\n## 小分類\n"
+            levels = [lv.strip() for lv in header.split(" / ")]
+            heading_lines = [
+                f"{'#' * (i + 1)} {lv}"
+                for i, lv in enumerate(levels)
+                if lv
+            ]
+            heading = "\n".join(heading_lines)
+
+            value = row.get(header, "")
+            if value:
+                body = value.replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
+            else:
+                body = "（値なし）"
+
+            parts.append(f"{heading}\n{body}")
+
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
     # 各フィールドの解決
@@ -257,9 +307,15 @@ class IssueMapper:
         params["priorityId"] = self._resolve_priority_id()
 
         # 任意: description（詳細）
-        template = self.cfg.get("description_template", "")
-        if template:
-            params["description"] = self._render_template(template, row)
+        # description_format: "auto"  → excel_md_tool と同じ形式で自動生成
+        # description_format: "template"（デフォルト）→ description_template を使用
+        desc_format = self.cfg.get("description_format", "template")
+        if desc_format == "auto":
+            params["description"] = self._render_auto(row)
+        else:
+            template = self.cfg.get("description_template", "")
+            if template:
+                params["description"] = self._render_template(template, row)
 
         # 任意: dueDate（期限日）
         due_col = self.cfg.get("due_date_col")
