@@ -1,0 +1,23 @@
+# 設定ファイル（APIキーを含むため除外）
+config.yaml
+
+# サンプル設定はコミット対象
+!config.sample.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# テスト用 Excel
+*.xlsx
+*.xls
+
+# 出力・ログ
+*.log

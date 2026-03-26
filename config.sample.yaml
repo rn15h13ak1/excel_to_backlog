@@ -1,0 +1,101 @@
+# ============================================================
+# Excel → Backlog 課題登録ツール 設定ファイル
+# ============================================================
+# このファイルをコピーして config.yaml を作成してください。
+# config.yaml は .gitignore で除外されています（API キーを含むため）。
+#
+#   cp config.sample.yaml config.yaml
+# ============================================================
+
+# ------------------------------------------------------------
+# Backlog 接続設定
+# ------------------------------------------------------------
+backlog:
+  space_host: "yourcompany.backlog.com"  # スペースのホスト名
+  api_key: "YOUR_API_KEY_HERE"           # Backlog API キー
+  project_key: "YOUR_PROJECT_KEY"        # プロジェクトキー（例: MYPROJ）
+  ssl_verify: true                       # SSL 証明書検証（オンプレ版で false にする場合あり）
+  base_path: ""                          # オンプレ版でパスプレフィックスがある場合（例: "/backlog"）
+
+# ------------------------------------------------------------
+# Excel ソース定義（複数指定可）
+# ------------------------------------------------------------
+sources:
+
+  # ---- ソース例1: シンプルな1行ヘッダーの管理表 ----
+  - name: "タスク管理表"              # ソースの識別名（--source オプションで指定可）
+    excel:
+      path: "/path/to/task_list.xlsx" # Excel ファイルパス（絶対パス推奨）
+      sheet: "Sheet1"                 # シート名（省略時: 最初のシート）
+      header_start_row: 1             # ヘッダー開始行（1始まり）
+      header_end_row: 1               # ヘッダー終了行（1行ヘッダーなら start と同じ値）
+      data_start_row: 2               # データ開始行
+      col_start: "A"                  # 読み込み開始列
+      col_end: "H"                    # 読み込み終了列
+
+    # 抽出条件（AND 条件、省略時は全行が対象）
+    filters:
+      - col_name: "ステータス"        # Excel のヘッダー名
+        value: "未着手"               # 完全一致する値
+        # match: "exact"             # "exact"（デフォルト）/ "contains" / "startswith"
+
+    # Backlog 課題へのマッピング設定
+    issue_mapping:
+      issue_type: "タスク"            # 種別名（Backlog プロジェクトの種別と一致する必要あり）
+      priority: "中"                  # 優先度名: 最高 / 高 / 中 / 低
+      summary_col: "タスク名"         # 件名として使う列名（必須）
+      description_template: |        # 詳細欄テンプレート。{{列名}} でセル値を埋め込み
+        ## 概要
+        {{概要}}
+
+        ## 対応内容
+        {{対応内容}}
+
+        ## 備考
+        {{備考}}
+      due_date_col: "期限日"          # 期限日列名（YYYY/MM/DD 形式を推奨）
+      # start_date_col: "開始日"      # 開始日列名（任意）
+      assignee_col: "担当者"          # 担当者列名（Backlog のユーザー名と一致する必要あり）
+
+      # カスタム属性へのマッピング（任意）
+      # custom_fields:
+      #   - field_name: "カテゴリ"    # Backlog のカスタム属性名
+      #     col_name: "分類"          # Excel の列名
+
+    # 重複チェック・更新設定
+    upsert:
+      enabled: false                  # true: 既存課題を更新 / false: 常に新規作成
+      # 重複判定方法（enabled: true の場合、どちらか一方を設定）
+      # key_col: "Backlog課題番号"    # Excel にissueKey（例: PROJ-123）を書いた列
+      # match_summary: true           # 件名が一致する課題を検索して更新
+
+  # ---- ソース例2: 2行ヘッダーの管理表 ----
+  - name: "問い合わせ管理表"
+    excel:
+      path: "/path/to/inquiry_list.xlsx"
+      sheet: "問い合わせ一覧"
+      header_start_row: 2             # 2行目からヘッダー
+      header_end_row: 3               # 3行目まで（2行ヘッダー → " / " で結合）
+      data_start_row: 4
+      col_start: "B"
+      col_end: "J"
+    filters:
+      - col_name: "対応状況"
+        value: "未対応"
+    issue_mapping:
+      issue_type: "要望"
+      priority: "高"
+      summary_col: "件名 / タイトル"  # 複数行ヘッダーは " / " 区切りで指定
+      description_template: |
+        ## 問い合わせ内容
+        {{内容 / 詳細}}
+
+        ## 受付日
+        {{受付日}}
+      assignee_col: "担当者 / 氏名"
+      custom_fields:
+        - field_name: "問い合わせ種別"
+          col_name: "種別 / カテゴリ"
+    upsert:
+      enabled: true
+      key_col: "Backlog番号"          # Excel のこの列に issueKey があれば更新、なければ新規作成

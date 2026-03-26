@@ -1,0 +1,314 @@
+"""
+Excel 行 → Backlog 課題パラメータ 変換モジュール
+=================================================
+config の issue_mapping 設定に従い、Excel の1行データを
+Backlog API の課題作成/更新パラメータ（dict）に変換する。
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from dataclasses import dataclass, field
+
+
+# ------------------------------------------------------------------
+# BacklogMaster: 名前 → ID マッピングを保持するコンテナ
+# ------------------------------------------------------------------
+
+@dataclass
+class BacklogMaster:
+    """BacklogClient から取得したマスターデータを格納する"""
+
+    project_id: int = 0
+    issue_type_map: dict[str, int] = field(default_factory=dict)   # {種別名: ID}
+    priority_map: dict[str, int] = field(default_factory=dict)     # {優先度名: ID}
+    user_map: dict[str, int] = field(default_factory=dict)         # {ユーザー名: ID}
+    # {属性名: {id, typeId, items: {選択肢名: ID}}}
+    custom_field_map: dict[str, dict] = field(default_factory=dict)
+
+    @classmethod
+    def build(cls, client, project_key: str) -> "BacklogMaster":
+        """
+        BacklogClient を使ってマスターデータを一括取得して BacklogMaster を生成する。
+        """
+        master = cls()
+
+        # プロジェクト
+        print("  プロジェクト情報を取得中...")
+        project = client.get_project(project_key)
+        master.project_id = project["id"]
+
+        # 種別
+        print("  種別一覧を取得中...")
+        issue_types = client.get_issue_types(project_key)
+        master.issue_type_map = {it["name"]: it["id"] for it in issue_types}
+
+        # 優先度
+        print("  優先度一覧を取得中...")
+        priorities = client.get_priorities()
+        master.priority_map = {p["name"]: p["id"] for p in priorities}
+
+        # プロジェクトメンバー
+        print("  プロジェクトメンバーを取得中...")
+        try:
+            users = client.get_project_users(project_key)
+            master.user_map = {u["name"]: u["id"] for u in users}
+        except SystemExit:
+            # 権限不足で取得できない場合は空のまま続行
+            print("  ⚠ プロジェクトメンバーの取得に失敗しました（担当者の解決はスキップされます）",
+                  file=sys.stderr)
+
+        # カスタム属性
+        print("  カスタム属性一覧を取得中...")
+        try:
+            custom_fields = client.get_custom_fields(project_key)
+            master.custom_field_map = {
+                cf["name"]: {
+                    "id": cf["id"],
+                    "typeId": cf.get("typeId"),
+                    "items": {
+                        item["name"]: item["id"]
+                        for item in cf.get("items", [])
+                    },
+                }
+                for cf in custom_fields
+            }
+        except SystemExit:
+            print("  ⚠ カスタム属性の取得に失敗しました", file=sys.stderr)
+
+        return master
+
+
+# ------------------------------------------------------------------
+# IssueMapper: Excel 行 → Backlog API パラメータ
+# ------------------------------------------------------------------
+
+class IssueMapper:
+    """
+    mapping_config (sources[i].issue_mapping) に従い、
+    Excel の行データを Backlog API パラメータに変換する。
+
+    mapping_config キー:
+        issue_type          : str   種別名（固定値）
+        priority            : str   優先度名（固定値、デフォルト: "中"）
+        summary_col         : str   件名として使う列名
+        description_template: str   詳細欄テンプレート（{{列名}} でセル値を埋め込み）
+        due_date_col        : str   期限日列名（任意）
+        start_date_col      : str   開始日列名（任意）
+        assignee_col        : str   担当者列名（任意）
+        custom_fields       : list  カスタム属性マッピングリスト
+            - field_name    : str   Backlog カスタム属性名
+              col_name      : str   Excel 列名
+    """
+
+    def __init__(self, mapping_config: dict, master: BacklogMaster):
+        self.cfg = mapping_config
+        self.master = master
+
+    # ------------------------------------------------------------------
+    # テンプレート処理
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _render_template(template: str, row: dict[str, str]) -> str:
+        """
+        {{列名}} を行のセル値に置換する。
+        存在しない列名はそのまま残す（警告なし）。
+        """
+        def replacer(m: re.Match) -> str:
+            col = m.group(1).strip()
+            return row.get(col, m.group(0))  # 未マッチはそのまま
+
+        return re.sub(r"\{\{(.+?)\}\}", replacer, template)
+
+    # ------------------------------------------------------------------
+    # 各フィールドの解決
+    # ------------------------------------------------------------------
+
+    def _resolve_issue_type_id(self) -> int:
+        name = self.cfg.get("issue_type", "")
+        if not name:
+            raise ValueError("issue_mapping.issue_type が設定されていません。")
+        iid = self.master.issue_type_map.get(name)
+        if iid is None:
+            available = list(self.master.issue_type_map.keys())
+            raise ValueError(
+                f"種別「{name}」が見つかりません。利用可能: {available}"
+            )
+        return iid
+
+    def _resolve_priority_id(self) -> int:
+        name = self.cfg.get("priority", "中")
+        pid = self.master.priority_map.get(name)
+        if pid is None:
+            # フォールバック: 優先度が取得できていない場合は 3（中）を仮定
+            print(
+                f"  ⚠ 優先度「{name}」が見つかりません。デフォルト値 3 を使用します。",
+                file=sys.stderr,
+            )
+            return 3
+        return pid
+
+    def _resolve_assignee_id(self, row: dict[str, str]) -> int | None:
+        col = self.cfg.get("assignee_col")
+        if not col:
+            return None
+        name = row.get(col, "").strip()
+        if not name:
+            return None
+        uid = self.master.user_map.get(name)
+        if uid is None:
+            print(
+                f"  ⚠ 担当者「{name}」がプロジェクトメンバーに見つかりません（スキップ）",
+                file=sys.stderr,
+            )
+        return uid
+
+    @staticmethod
+    def _normalize_date(value: str) -> str | None:
+        """
+        "YYYY/MM/DD" → "YYYY-MM-DD" に変換。
+        既に "YYYY-MM-DD" 形式ならそのまま返す。
+        空文字列や変換不可は None を返す。
+        """
+        if not value:
+            return None
+        # YYYY/MM/DD → YYYY-MM-DD
+        normalized = value.replace("/", "-")
+        # 簡易バリデーション: YYYY-MM-DD
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
+            return normalized
+        return None
+
+    def _resolve_custom_fields(self, row: dict[str, str]) -> dict:
+        """
+        custom_fields 設定を解決して {customField_{id}: value} の dict を返す。
+        """
+        params = {}
+        for cf_cfg in self.cfg.get("custom_fields") or []:
+            field_name = cf_cfg.get("field_name", "")
+            col_name = cf_cfg.get("col_name", "")
+
+            if field_name not in self.master.custom_field_map:
+                print(
+                    f"  ⚠ カスタム属性「{field_name}」が見つかりません（スキップ）",
+                    file=sys.stderr,
+                )
+                continue
+
+            cf_info = self.master.custom_field_map[field_name]
+            field_id = cf_info["id"]
+            type_id = cf_info.get("typeId")
+            items_map = cf_info.get("items", {})
+
+            value = row.get(col_name, "").strip()
+            if not value:
+                continue
+
+            # 選択肢型（typeId 5=単一リスト, 6=複数, 7=チェックボックス, 8=ラジオ）
+            # → 選択肢名を ID に変換
+            list_types = {5, 6, 7, 8}
+            if type_id in list_types and items_map:
+                resolved = items_map.get(value)
+                if resolved is None:
+                    print(
+                        f"  ⚠ カスタム属性「{field_name}」の選択肢「{value}」が見つかりません（スキップ）",
+                        file=sys.stderr,
+                    )
+                    continue
+                params[f"customField_{field_id}"] = [resolved]
+            else:
+                params[f"customField_{field_id}"] = value
+
+        return params
+
+    # ------------------------------------------------------------------
+    # メイン変換処理
+    # ------------------------------------------------------------------
+
+    def map_row(self, row: dict[str, str]) -> dict:
+        """
+        Excel の1行データを Backlog API の課題パラメータに変換して返す。
+
+        Returns
+        -------
+        dict
+            Backlog API の create_issue / update_issue に渡せるパラメータ dict
+        """
+        params: dict = {}
+
+        # 必須: projectId
+        params["projectId"] = self.master.project_id
+
+        # 必須: summary（件名）
+        summary_col = self.cfg.get("summary_col", "")
+        summary = row.get(summary_col, "").strip()
+        if not summary:
+            raise ValueError(
+                f"件名列「{summary_col}」の値が空です。この行はスキップします。"
+            )
+        params["summary"] = summary
+
+        # 必須: issueTypeId（種別）
+        params["issueTypeId"] = self._resolve_issue_type_id()
+
+        # 必須: priorityId（優先度）
+        params["priorityId"] = self._resolve_priority_id()
+
+        # 任意: description（詳細）
+        template = self.cfg.get("description_template", "")
+        if template:
+            params["description"] = self._render_template(template, row)
+
+        # 任意: dueDate（期限日）
+        due_col = self.cfg.get("due_date_col")
+        if due_col:
+            due = self._normalize_date(row.get(due_col, ""))
+            if due:
+                params["dueDate"] = due
+
+        # 任意: startDate（開始日）
+        start_col = self.cfg.get("start_date_col")
+        if start_col:
+            start = self._normalize_date(row.get(start_col, ""))
+            if start:
+                params["startDate"] = start
+
+        # 任意: assigneeId（担当者）
+        assignee_id = self._resolve_assignee_id(row)
+        if assignee_id is not None:
+            params["assigneeId"] = assignee_id
+
+        # 任意: カスタム属性
+        params.update(self._resolve_custom_fields(row))
+
+        return params
+
+    def format_dry_run(self, row: dict[str, str], index: int) -> str:
+        """
+        ドライラン用: 変換結果を人間が読みやすい形式で返す。
+        変換に失敗した場合はエラーメッセージを返す。
+        """
+        try:
+            params = self.map_row(row)
+        except ValueError as e:
+            return f"  [{index}] ⚠ スキップ: {e}"
+
+        lines = [f"  [{index}] 件名: {params.get('summary', '（なし）')}"]
+        if "description" in params:
+            # 最初の3行だけ表示
+            desc_lines = params["description"].splitlines()[:3]
+            for dl in desc_lines:
+                lines.append(f"         {dl}")
+            if len(params["description"].splitlines()) > 3:
+                lines.append("         ...")
+        if "dueDate" in params:
+            lines.append(f"         期限日: {params['dueDate']}")
+        if "assigneeId" in params:
+            lines.append(f"         担当者ID: {params['assigneeId']}")
+        # カスタム属性
+        for k, v in params.items():
+            if k.startswith("customField_"):
+                lines.append(f"         {k}: {v}")
+        return "\n".join(lines)
