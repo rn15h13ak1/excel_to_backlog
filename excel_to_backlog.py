@@ -122,16 +122,24 @@ def find_existing_issue(
 def build_master_labels(master: BacklogMaster) -> dict:
     """
     ID → 表示名 の逆引き辞書を生成する（プレビュー表示用）。
-    例: {10: "タスク", 3: "中", 99: "田中太郎"}
+
+    種別・優先度・ユーザーは ID 空間が独立しているため、
+    フラットにマージせずカテゴリ別のネスト構造で返す。
+
+    Returns
+    -------
+    dict
+        {
+          "issue_type": {id: 種別名, ...},
+          "priority":   {id: 優先度名, ...},
+          "user":       {id: ユーザー名, ...},
+        }
     """
-    labels = {}
-    for name, id_ in master.issue_type_map.items():
-        labels[id_] = name
-    for name, id_ in master.priority_map.items():
-        labels[id_] = name
-    for name, id_ in master.user_map.items():
-        labels[id_] = name
-    return labels
+    return {
+        "issue_type": {id_: name for name, id_ in master.issue_type_map.items()},
+        "priority":   {id_: name for name, id_ in master.priority_map.items()},
+        "user":       {id_: name for name, id_ in master.user_map.items()},
+    }
 
 
 def generate_preview_file(

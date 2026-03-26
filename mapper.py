@@ -373,8 +373,13 @@ class IssueMapper:
         """
         プレビューファイル用: 課題の全内容を Markdown ブロックとして返す。
 
-        master_labels : {issueTypeId: 種別名, priorityId: 優先度名, assigneeId: ユーザー名}
-                        名前逆引き用（省略時は ID をそのまま表示）
+        master_labels : build_master_labels() が返すネスト構造
+                        {
+                          "issue_type": {id: 種別名},
+                          "priority":   {id: 優先度名},
+                          "user":       {id: ユーザー名},
+                        }
+                        省略時は ID をそのまま表示。
         """
         try:
             params = self.map_row(row)
@@ -382,22 +387,25 @@ class IssueMapper:
             return f"## 課題 {index}\n\n> ⚠ スキップ: {e}\n"
 
         labels = master_labels or {}
+        issue_type_labels = labels.get("issue_type", {})
+        priority_labels   = labels.get("priority", {})
+        user_labels       = labels.get("user", {})
 
         lines = [f"## 課題 {index}"]
         lines.append("")
 
         # 基本フィールド
         lines.append(f"**件名:** {params.get('summary', '（なし）')}  ")
-        issue_type_label = labels.get(params.get("issueTypeId"), str(params.get("issueTypeId", "")))
+        issue_type_label = issue_type_labels.get(params.get("issueTypeId"), str(params.get("issueTypeId", "")))
         lines.append(f"**種別:** {issue_type_label}  ")
-        priority_label = labels.get(params.get("priorityId"), str(params.get("priorityId", "")))
+        priority_label = priority_labels.get(params.get("priorityId"), str(params.get("priorityId", "")))
         lines.append(f"**優先度:** {priority_label}  ")
         if "dueDate" in params:
             lines.append(f"**期限日:** {params['dueDate']}  ")
         if "startDate" in params:
             lines.append(f"**開始日:** {params['startDate']}  ")
         if "assigneeId" in params:
-            assignee_label = labels.get(params["assigneeId"], str(params["assigneeId"]))
+            assignee_label = user_labels.get(params["assigneeId"], str(params["assigneeId"]))
             lines.append(f"**担当者:** {assignee_label}  ")
         for k, v in params.items():
             if k.startswith("customField_"):
