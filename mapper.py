@@ -53,7 +53,14 @@ class BacklogMaster:
         print("  プロジェクトメンバーを取得中...")
         try:
             users = client.get_project_users(project_key)
-            master.user_map = {u["name"]: u["id"] for u in users}
+            # 表示名（name）とログインID（userId）の両方でルックアップできるようにする
+            # 同じ numeric id に複数キーが紐づく場合があるが問題なし
+            user_map: dict[str, int] = {}
+            for u in users:
+                user_map[u["name"]] = u["id"]
+                if u.get("userId"):
+                    user_map[u["userId"]] = u["id"]
+            master.user_map = user_map
         except SystemExit:
             # 権限不足で取得できない場合は空のまま続行
             print("  ⚠ プロジェクトメンバーの取得に失敗しました（担当者の解決はスキップされます）",
@@ -240,8 +247,16 @@ class IssueMapper:
             return None
         uid = self.master.user_map.get(name)
         if uid is None:
+            # 重複のない表示名リストを作成（name と userId で同じ id が入るため）
+            seen_ids: set[int] = set()
+            unique_names: list[str] = []
+            for k, v in self.master.user_map.items():
+                if v not in seen_ids:
+                    seen_ids.add(v)
+                    unique_names.append(k)
             print(
-                f"  ⚠ 担当者「{name}」がプロジェクトメンバーに見つかりません（スキップ）",
+                f"  ⚠ 担当者「{name}」がプロジェクトメンバーに見つかりません（スキップ）\n"
+                f"    利用可能（表示名 or ログインID）: {unique_names}",
                 file=sys.stderr,
             )
         return uid

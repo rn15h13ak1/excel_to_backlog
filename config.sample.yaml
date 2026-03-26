@@ -156,7 +156,7 @@ sources:
       # due_date_col: "{{年度}}/03/31"              # 年度列 + 固定の月日で組み立てる例
       # due_date_col: "{{終了年}}/{{終了月}}/{{終了日}}"  # 複数列から組み立てる例
       # start_date_col: "開始日"      # 開始日列名（任意）
-      assignee_col: "担当者"          # 担当者列名（Backlog のユーザー名と一致する必要あり）
+      assignee_col: "担当者"          # 担当者列名（Backlog の表示名 or ログインID と一致する必要あり）
 
       # カスタム属性へのマッピング（任意）
       # custom_fields:
