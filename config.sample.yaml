@@ -38,16 +38,39 @@ sources:
       col_start: "A"                  # 読み込み開始列
       col_end: "H"                    # 読み込み終了列
 
-    # 抽出条件（複数条件は AND 評価、省略時は全行が対象）
+    # ----------------------------------------------------------------
+    # 抽出条件の指定方法
+    # ----------------------------------------------------------------
+    # [filters]  複数条件を AND 評価（省略時は全行が対象）
+    #   value  : 単一値との完全一致
+    #   values : 複数値のいずれかに一致（OR 条件）
+    #   match  : "exact"（デフォルト）/ "contains" / "startswith"
+    #
+    # [filter_groups]  グループ内は AND、グループ間は OR で評価
+    #   複合キー（例: 項番+枝番 のペア）で特定行を指定したい場合に使用
+    #   filters と filter_groups が両方指定された場合は filter_groups を優先
+    # ----------------------------------------------------------------
+
+    # --- filters 方式（AND 評価）---
     filters:
       - col_name: "ステータス"        # Excel のヘッダー名
         value: "未着手"               # 単一値と完全一致する行を抽出
         # match: "exact"             # "exact"（デフォルト）/ "contains" / "startswith"
-      # --- 複数値のいずれかに一致する行を抽出（OR 条件） ---
       # - col_name: "ステータス"
-      #   values: ["未着手", "対応中"]   # いずれかに一致すれば抽出（value の代わりに使用）
-      # - col_name: "項番"
-      #   values: ["1", "3", "5"]       # 特定の行番号を指定して抽出する場合など
+      #   values: ["未着手", "対応中"]   # 複数値のいずれかに一致（OR）
+
+    # --- filter_groups 方式（複合キーで特定行をペア指定）---
+    # filter_groups:
+    #   - filters:                     # グループ1: 項番=1 かつ 枝番=A
+    #       - col_name: "項番"
+    #         value: "1"
+    #       - col_name: "枝番"
+    #         value: "A"
+    #   - filters:                     # グループ2: 項番=3 かつ 枝番=B
+    #       - col_name: "項番"
+    #         value: "3"
+    #       - col_name: "枝番"
+    #         value: "B"
 
     # Backlog 課題へのマッピング設定
     issue_mapping:

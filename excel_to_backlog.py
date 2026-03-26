@@ -142,6 +142,64 @@ def inject_meta(row: dict, source_cfg: dict) -> dict:
 
 
 # ------------------------------------------------------------------
+# フィルタリング（filters / filter_groups 共通処理）
+# ------------------------------------------------------------------
+
+def apply_filters(
+    rows: list,
+    source_cfg: dict,
+    headers: list,
+) -> list:
+    """
+    source_cfg の filters または filter_groups に従い行を絞り込む。
+
+    filters       : 複数条件を AND 評価（従来通り）
+    filter_groups : 各グループを AND 評価し、グループ間を OR 評価
+                    同じ行が複数グループにマッチしても重複しない
+    両方省略時は全行を返す。filters と filter_groups が両方指定された場合は
+    filter_groups を優先する。
+    """
+    filter_groups_cfg = source_cfg.get("filter_groups") or []
+    filters_cfg = source_cfg.get("filters") or []
+
+    if filter_groups_cfg:
+        # 列名チェック（全グループ対象）
+        for gi, group in enumerate(filter_groups_cfg):
+            for cond in group.get("filters") or []:
+                col = cond.get("col_name", "")
+                if col and col not in headers:
+                    print(
+                        f"  ⚠ filter_groups[{gi}] の列「{col}」がヘッダーに存在しません。"
+                        f"（ヘッダー: {headers}）",
+                        file=sys.stderr,
+                    )
+
+        # 各グループを AND 評価 → グループ間を OR（重複除去しつつ順序保持）
+        seen_ids: set = set()
+        result = []
+        for group in filter_groups_cfg:
+            group_filters = group.get("filters") or []
+            for row in ExcelReader.filter_rows(rows, group_filters):
+                rid = id(row)
+                if rid not in seen_ids:
+                    seen_ids.add(rid)
+                    result.append(row)
+        return result
+
+    else:
+        # 従来の filters（AND 評価）
+        for cond in filters_cfg:
+            col = cond.get("col_name", "")
+            if col and col not in headers:
+                print(
+                    f"  ⚠ フィルター列「{col}」がヘッダーに存在しません。"
+                    f"（ヘッダー: {headers}）",
+                    file=sys.stderr,
+                )
+        return ExcelReader.filter_rows(rows, filters_cfg)
+
+
+# ------------------------------------------------------------------
 # プレビューファイル生成
 # ------------------------------------------------------------------
 
@@ -199,7 +257,6 @@ def generate_preview_file(
     for source_cfg in sources_cfg:
         name = source_cfg.get("name", "（名前なし）")
         excel_cfg = source_cfg.get("excel", {})
-        filters_cfg = source_cfg.get("filters") or []
         mapping_cfg = source_cfg.get("issue_mapping", {})
 
         lines.append(f"# ソース: {name}")
@@ -219,7 +276,7 @@ def generate_preview_file(
             lines.append("")
             continue
 
-        filtered_rows = ExcelReader.filter_rows(rows, filters_cfg)
+        filtered_rows = apply_filters(rows, source_cfg, headers)
         lines.append(f"対象行数: **{len(filtered_rows)} 件**（フィルター後）")
         lines.append("")
 
@@ -263,7 +320,6 @@ def process_source(
     """
     name = source_cfg.get("name", "（名前なし）")
     excel_cfg = source_cfg.get("excel", {})
-    filters_cfg = source_cfg.get("filters") or []
     mapping_cfg = source_cfg.get("issue_mapping", {})
     upsert_cfg = source_cfg.get("upsert") or {}
     upsert_enabled = upsert_cfg.get("enabled", False)
@@ -288,18 +344,8 @@ def process_source(
 
     print(f"  読込行数: {len(rows)} 行（フィルター前）")
 
-    # フィルター条件の列名チェック（警告のみ）
-    for cond in filters_cfg:
-        col = cond.get("col_name", "")
-        if col and col not in headers:
-            print(
-                f"  ⚠ フィルター列「{col}」がヘッダーに存在しません。"
-                f"（ヘッダー: {headers}）",
-                file=sys.stderr,
-            )
-
-    # フィルタリング
-    filtered_rows = ExcelReader.filter_rows(rows, filters_cfg)
+    # フィルタリング（filters / filter_groups 共通処理）
+    filtered_rows = apply_filters(rows, source_cfg, headers)
     print(f"  対象行数: {len(filtered_rows)} 行（フィルター後）")
 
     if not filtered_rows:
