@@ -25,7 +25,12 @@ sources:
   # ---- ソース例1: シンプルな1行ヘッダーの管理表 ----
   - name: "タスク管理表"              # ソースの識別名（--source オプションで指定可）
     excel:
-      path: "/path/to/task_list.xlsx" # Excel ファイルパス（絶対パス推奨）
+      # path のパス区切り文字について:
+      #   Windows: バックスラッシュ(\)はYAMLでエスケープ文字になるため、以下のいずれかで記述
+      #     シングルクォート: path: 'C:\Users\username\Documents\task_list.xlsx'
+      #     スラッシュ:       path: "C:/Users/username/Documents/task_list.xlsx"
+      #   Mac/Linux: スラッシュ(/)をそのまま使用可
+      path: 'C:\Users\username\Documents\task_list.xlsx'  # ← Windowsの場合の例
       sheet: "Sheet1"                 # シート名（省略時: 最初のシート）
       header_start_row: 1             # ヘッダー開始行（1始まり）
       header_end_row: 1               # ヘッダー終了行（1行ヘッダーなら start と同じ値）
@@ -72,7 +77,7 @@ sources:
   # ---- ソース例2: 2行ヘッダーの管理表 ----
   - name: "問い合わせ管理表"
     excel:
-      path: "/path/to/inquiry_list.xlsx"
+      path: 'C:\Users\username\Documents\inquiry_list.xlsx'  # ← Windowsの場合の例
       sheet: "問い合わせ一覧"
       header_start_row: 2             # 2行目からヘッダー
       header_end_row: 3               # 3行目まで（2行ヘッダー → " / " で結合）
