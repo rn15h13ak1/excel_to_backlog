@@ -95,8 +95,8 @@ class IssueMapper:
         summary_col         : str   件名として使う列名（summary_template と排他）
         summary_template    : str   件名テンプレート（{{列名}} でセル値を埋め込み、summary_col より優先）
         description_template: str   詳細欄テンプレート（{{列名}} でセル値を埋め込み）
-        due_date_col        : str   期限日列名（任意）
-        start_date_col      : str   開始日列名（任意）
+        due_date_col        : str   期限日列名、または {{列名}} テンプレート（任意）
+        start_date_col      : str   開始日列名、または {{列名}} テンプレート（任意）
         assignee_col        : str   担当者列名（任意）
         custom_fields       : list  カスタム属性マッピングリスト
             - field_name    : str   Backlog カスタム属性名
@@ -336,14 +336,26 @@ class IssueMapper:
         # 任意: dueDate（期限日）
         due_col = self.cfg.get("due_date_col")
         if due_col:
-            due = self._normalize_date(row.get(due_col, ""))
+            # {{列名}} を含む場合はテンプレート展開して日付文字列を得る
+            # 含まない場合は列名として row から値を取得する（後方互換）
+            due_value = (
+                self._render_template(due_col, row)
+                if "{{" in due_col
+                else row.get(due_col, "")
+            )
+            due = self._normalize_date(due_value)
             if due:
                 params["dueDate"] = due
 
         # 任意: startDate（開始日）
         start_col = self.cfg.get("start_date_col")
         if start_col:
-            start = self._normalize_date(row.get(start_col, ""))
+            start_value = (
+                self._render_template(start_col, row)
+                if "{{" in start_col
+                else row.get(start_col, "")
+            )
+            start = self._normalize_date(start_value)
             if start:
                 params["startDate"] = start
 
