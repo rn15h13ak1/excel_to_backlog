@@ -115,14 +115,20 @@ class IssueMapper:
     # テンプレート処理
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _render_template(template: str, row: dict[str, str]) -> str:
+    def _render_template(self, template: str, row: dict[str, str]) -> str:
         """
         {{列名}} を行のセル値に置換する。
         存在しない列名はそのまま残す（警告なし）。
+
+        特殊プレースホルダー:
+          {{auto}} : _render_auto() の出力に展開される。
+                     description_format が "template" でも auto 方式の出力を
+                     任意の位置に埋め込めるため、ヘッダー・フッターの付与に使える。
         """
         def replacer(m: re.Match) -> str:
             col = m.group(1).strip()
+            if col == "auto":
+                return self._render_auto(row)
             return row.get(col, m.group(0))  # 未マッチはそのまま
 
         return re.sub(r"\{\{(.+?)\}\}", replacer, template)

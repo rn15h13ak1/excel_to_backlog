@@ -55,6 +55,8 @@ sources:
       # ----------------------------------------------------------------
       # [template] description_template に記述したMarkdownを使用（デフォルト）
       #   {{列名}} の部分がセル値に置換される
+      #   特殊プレースホルダー {{auto}} を使うと auto 方式の出力を任意の位置に展開できる
+      #   → auto 出力にヘッダー・フッターを追加したい場合はこの方法を使う
       #
       # [auto] excel_md_tool と同じ形式で全列を自動変換
       #   列名が # 見出し、セル値が本文になる
@@ -73,6 +75,20 @@ sources:
 
         ## 備考
         {{備考}}
+
+      # --- template 方式 + {{auto}} でヘッダー・フッターを付加する例 ---
+      # description_format: "template"
+      # description_cols:              # {{auto}} 展開時に出力する列（省略時は全列）
+      #   - "概要"
+      #   - "対応内容"
+      #   - "備考"
+      # description_template: |
+      #   担当: {{担当者}} / 期限: {{期限日}}
+      #
+      #   {{auto}}
+      #
+      #   ---
+      #   ※このチケットは自動生成されました。
 
       # --- auto 方式（excel_md_tool と同じ形式）---
       # description_format: "auto"
