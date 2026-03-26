@@ -116,6 +116,32 @@ def find_existing_issue(
 
 
 # ------------------------------------------------------------------
+# メタキー注入
+# ------------------------------------------------------------------
+
+def inject_meta(row: dict, source_cfg: dict) -> dict:
+    """
+    行データに Excel ソース由来のメタ情報を注入して返す。
+
+    注入キー（アンダースコア始まりで Excel 列名とは区別できる）:
+        _source_name  : sources[i].name の値
+        _excel_path   : sources[i].excel.path の値
+        _excel_sheet  : sources[i].excel.sheet の値
+
+    これらは summary_template / description_template などの
+    {{キー名}} プレースホルダーで参照できる。
+    """
+    excel_cfg = source_cfg.get("excel", {})
+    meta = {
+        "_source_name": source_cfg.get("name", ""),
+        "_excel_path":  excel_cfg.get("path", ""),
+        "_excel_sheet": excel_cfg.get("sheet", ""),
+    }
+    # 元の row は変更しない（コピーして返す）
+    return {**meta, **row}
+
+
+# ------------------------------------------------------------------
 # プレビューファイル生成
 # ------------------------------------------------------------------
 
@@ -207,7 +233,8 @@ def generate_preview_file(
         mapper = IssueMapper(mapping_cfg, master, headers=headers)
 
         for i, row in enumerate(filtered_rows, 1):
-            lines.append(mapper.format_preview(row, i, master_labels=master_labels))
+            enriched = inject_meta(row, source_cfg)
+            lines.append(mapper.format_preview(enriched, i, master_labels=master_labels))
             lines.append("")
             lines.append("---")
             lines.append("")
@@ -286,13 +313,14 @@ def process_source(
     if dry_run:
         print(f"\n  [DRY RUN] 以下の課題を作成/更新します:\n")
         for i, row in enumerate(filtered_rows, 1):
-            print(mapper.format_dry_run(row, i))
+            print(mapper.format_dry_run(inject_meta(row, source_cfg), i))
         return counts
 
     # ---- 実処理 ----
     for i, row in enumerate(filtered_rows, 1):
+        enriched = inject_meta(row, source_cfg)
         try:
-            params = mapper.map_row(row)
+            params = mapper.map_row(enriched)
         except ValueError as e:
             print(f"  [{i}] ⚠ スキップ: {e}", file=sys.stderr)
             counts["skipped"] += 1
@@ -300,7 +328,7 @@ def process_source(
 
         try:
             if upsert_enabled:
-                existing_key = find_existing_issue(client, upsert_cfg, row, params, master)
+                existing_key = find_existing_issue(client, upsert_cfg, enriched, params, master)
                 if existing_key:
                     # projectId は更新時不要なので除去
                     update_params = {k: v for k, v in params.items() if k != "projectId"}
