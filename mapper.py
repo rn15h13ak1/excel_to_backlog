@@ -122,17 +122,41 @@ class IssueMapper:
         存在しない列名はそのまま残す（警告なし）。
 
         特殊プレースホルダー:
-          {{auto}} : _render_auto() の出力に展開される。
-                     description_format が "template" でも auto 方式の出力を
-                     任意の位置に埋め込めるため、ヘッダー・フッターの付与に使える。
+          {{auto}}          : _render_auto() の出力に展開される。
+                              description_format が "template" でも auto 方式の出力を
+                              任意の位置に埋め込めるため、ヘッダー・フッターの付与に使える。
+
+          {{#列名}}...{{/列名}} : 条件ブロック。
+                              指定列の値が空でなければブロック内を出力し、
+                              空であればブロック全体を出力しない（セパレーター等の
+                              「値がある場合のみ表示したい文字列」に使用）。
+                              例: "項番{{項番}}{{#枝番}}-{{枝番}}{{/枝番}}"
+                                → 枝番="1" → "項番1-1"
+                                → 枝番=""  → "項番1"
         """
+        # Step 1: 条件ブロック {{#列名}}...{{/列名}} を処理
+        # 値が非空 → ブロック内テキストをそのまま残す（Step 2 でさらに展開）
+        # 値が空   → ブロック全体を除去
+        def cond_replacer(m: re.Match) -> str:
+            col = m.group(1).strip()
+            inner = m.group(2)
+            return inner if row.get(col, "") else ""
+
+        result = re.sub(
+            r"\{\{#(.+?)\}\}(.*?)\{\{/\1\}\}",
+            cond_replacer,
+            template,
+            flags=re.DOTALL,
+        )
+
+        # Step 2: 通常プレースホルダー {{列名}} を展開
         def replacer(m: re.Match) -> str:
             col = m.group(1).strip()
             if col == "auto":
                 return self._render_auto(row)
             return row.get(col, m.group(0))  # 未マッチはそのまま
 
-        return re.sub(r"\{\{(.+?)\}\}", replacer, template)
+        return re.sub(r"\{\{(.+?)\}\}", replacer, result)
 
     def _render_auto(self, row: dict[str, str]) -> str:
         """
