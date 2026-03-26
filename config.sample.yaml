@@ -48,7 +48,11 @@ sources:
     issue_mapping:
       issue_type: "タスク"            # 種別名（Backlog プロジェクトの種別と一致する必要あり）
       priority: "中"                  # 優先度名: 最高 / 高 / 中 / 低
-      summary_col: "タスク名"         # 件名として使う列名（必須）
+
+      # 件名の指定方法: summary_col か summary_template のどちらか一方を設定する
+      summary_col: "タスク名"         # 1列の値をそのまま件名にする場合
+      # summary_template: "【{{カテゴリ}}】{{タスク名}}（{{担当者}}）"
+      #                               # {{列名}} で複数列を組み合わせる場合（summary_col より優先）
 
       # ----------------------------------------------------------------
       # 本文（description）の生成方式: "template" または "auto"

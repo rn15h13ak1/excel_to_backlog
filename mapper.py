@@ -92,7 +92,8 @@ class IssueMapper:
     mapping_config キー:
         issue_type          : str   種別名（固定値）
         priority            : str   優先度名（固定値、デフォルト: "中"）
-        summary_col         : str   件名として使う列名
+        summary_col         : str   件名として使う列名（summary_template と排他）
+        summary_template    : str   件名テンプレート（{{列名}} でセル値を埋め込み、summary_col より優先）
         description_template: str   詳細欄テンプレート（{{列名}} でセル値を埋め込み）
         due_date_col        : str   期限日列名（任意）
         start_date_col      : str   開始日列名（任意）
@@ -298,12 +299,21 @@ class IssueMapper:
         params["projectId"] = self.master.project_id
 
         # 必須: summary（件名）
-        summary_col = self.cfg.get("summary_col", "")
-        summary = row.get(summary_col, "").strip()
-        if not summary:
-            raise ValueError(
-                f"件名列「{summary_col}」の値が空です。この行はスキップします。"
-            )
+        # summary_template が指定されていればテンプレート展開、なければ summary_col の値を使用
+        summary_template = self.cfg.get("summary_template", "")
+        if summary_template:
+            summary = self._render_template(summary_template, row).strip()
+            if not summary:
+                raise ValueError(
+                    f"summary_template の展開結果が空です。この行はスキップします。"
+                )
+        else:
+            summary_col = self.cfg.get("summary_col", "")
+            summary = row.get(summary_col, "").strip()
+            if not summary:
+                raise ValueError(
+                    f"件名列「{summary_col}」の値が空です。この行はスキップします。"
+                )
         params["summary"] = summary
 
         # 必須: issueTypeId（種別）
