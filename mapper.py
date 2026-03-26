@@ -189,15 +189,15 @@ class IssueMapper:
         return iid
 
     def _resolve_priority_id(self) -> int:
-        name = self.cfg.get("priority", "中")
+        name = self.cfg.get("priority", "")
+        if not name:
+            raise ValueError("issue_mapping.priority が設定されていません。")
         pid = self.master.priority_map.get(name)
         if pid is None:
-            # フォールバック: 優先度が取得できていない場合は 3（中）を仮定
-            print(
-                f"  ⚠ 優先度「{name}」が見つかりません。デフォルト値 3 を使用します。",
-                file=sys.stderr,
+            available = list(self.master.priority_map.keys())
+            raise ValueError(
+                f"優先度「{name}」が見つかりません。利用可能: {available}"
             )
-            return 3
         return pid
 
     def _resolve_assignee_id(self, row: dict[str, str]) -> int | None:
