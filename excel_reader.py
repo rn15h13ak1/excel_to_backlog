@@ -4,7 +4,7 @@ Excel 読み込み・フィルタリングモジュール
 excel_md_tool (useExcel.ts) と同等のロジックを Python / openpyxl で実装。
 
 対応仕様:
-  - ヘッダー行の範囲指定（複数行ヘッダーは " / " 結合）
+  - ヘッダー行の範囲指定（複数行ヘッダーは " / " 結合、セル内改行は除去）
   - データ開始行の指定
   - 列範囲の指定（A, B, C ... の列ラベル形式）
   - フィルター条件（列名＋値の AND フィルター、value: 単一値 / values: 複数値 OR）
@@ -148,7 +148,7 @@ class ExcelReader:
             for row_idx in range(self.header_start_row, self.header_end_row + 1):
                 # openpyxl は 1 始まり
                 cell = ws.cell(row=row_idx, column=col_idx + 1)
-                val = cell_to_str(cell.value)
+                val = cell_to_str(cell.value).replace("\r", "").replace("\n", "")
                 if val:
                     parts.append(val)
             headers.append(self.MULTI_HEADER_SEP.join(parts) if parts else f"Col{col_idx + 1}")
