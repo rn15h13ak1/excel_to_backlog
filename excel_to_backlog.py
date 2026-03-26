@@ -39,7 +39,7 @@ from pathlib import Path
 
 import yaml
 
-from backlog_client import BacklogClient
+from backlog_client import BacklogClient, BacklogNoChangeError
 from excel_reader import ExcelReader
 from mapper import BacklogMaster, IssueMapper
 
@@ -378,9 +378,14 @@ def process_source(
                 if existing_key:
                     # projectId は更新時不要なので除去
                     update_params = {k: v for k, v in params.items() if k != "projectId"}
-                    client.update_issue(existing_key, update_params)
-                    print(f"  [{i}] ✅ 更新: {existing_key} — {params.get('summary', '')}")
-                    counts["updated"] += 1
+                    try:
+                        client.update_issue(existing_key, update_params)
+                        print(f"  [{i}] ✅ 更新: {existing_key} — {params.get('summary', '')}")
+                        counts["updated"] += 1
+                    except BacklogNoChangeError:
+                        print(f"  [{i}] — スキップ（変更なし）: {existing_key} — {params.get('summary', '')}")
+                        counts["skipped"] += 1
+                        continue
                 else:
                     issue = client.create_issue(params)
                     print(f"  [{i}] ✅ 作成: {issue['issueKey']} — {issue['summary']}")

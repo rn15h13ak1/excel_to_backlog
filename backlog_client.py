@@ -14,6 +14,13 @@ import urllib.parse
 import urllib.request
 
 
+class BacklogNoChangeError(Exception):
+    """
+    更新内容が現在の課題と同一のため変更なしと判断されたエラー。
+    sys.exit(1) ではなくスキップ扱いにしたい呼び出し元で使用する。
+    """
+
+
 class BacklogClient:
     def __init__(
         self,
@@ -54,10 +61,23 @@ class BacklogClient:
                 )
         return "&".join(parts)
 
-    def _handle_http_error(self, e: urllib.error.HTTPError, endpoint: str) -> None:
-        """HTTPError を整形して標準エラーに出力し sys.exit(1)"""
+    def _handle_http_error(
+        self,
+        e: urllib.error.HTTPError,
+        endpoint: str,
+        *,
+        raise_no_change: bool = False,
+    ) -> None:
+        """
+        HTTPError を整形して標準エラーに出力し sys.exit(1)。
+
+        raise_no_change=True のとき、HTTP 400 かつ Backlog エラーコード 7
+        （InvalidRequestError：変更内容なし等）であれば sys.exit の代わりに
+        BacklogNoChangeError を raise する。
+        """
         detail = ""
         raw_body = ""
+        errors: list = []
         try:
             raw_body = e.read().decode("utf-8")
             body = json.loads(raw_body)
@@ -69,6 +89,12 @@ class BacklogClient:
                 )
         except Exception:
             pass
+
+        # 変更なしエラーの検出: 更新時に HTTP 400 + error code 7 が返る
+        if raise_no_change and e.code == 400 and any(
+            err.get("code") == 7 for err in errors
+        ):
+            raise BacklogNoChangeError(detail or "変更内容が同一のためスキップ")
 
         print(
             f"エラー: API呼び出しに失敗しました（HTTP {e.code}）: {endpoint}",
@@ -141,7 +167,7 @@ class BacklogClient:
         except urllib.error.HTTPError as e:
             self._handle_http_error(e, endpoint)
 
-    def _patch(self, endpoint: str, params: dict) -> dict:
+    def _patch(self, endpoint: str, params: dict, *, raise_no_change: bool = False) -> dict:
         """PATCH リクエストを送信して JSON を返す"""
         url = f"{self.base_url}{endpoint}?apiKey={urllib.parse.quote(self.api_key)}"
 
@@ -170,7 +196,7 @@ class BacklogClient:
             with urllib.request.urlopen(req, timeout=30, context=self.ssl_context) as res:
                 return json.loads(res.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            self._handle_http_error(e, endpoint)
+            self._handle_http_error(e, endpoint, raise_no_change=raise_no_change)
 
     # ------------------------------------------------------------------
     # マスターデータ取得
@@ -284,5 +310,12 @@ class BacklogClient:
         """
         既存課題を更新する。
         params は create_issue と同じキー（すべて任意）。
+
+        変更内容が同一で Backlog API がエラー（HTTP 400 / code 7）を返した場合は
+        BacklogNoChangeError を raise する（sys.exit しない）。
         """
-        return self._patch(f"/issues/{urllib.parse.quote(str(issue_id_or_key))}", params)
+        return self._patch(
+            f"/issues/{urllib.parse.quote(str(issue_id_or_key))}",
+            params,
+            raise_no_change=True,
+        )
