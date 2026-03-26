@@ -24,6 +24,9 @@ Excel → Backlog 課題登録ツール
   # 設定ファイルを指定
   python excel_to_backlog.py --config path/to/config.yaml
 
+  # 登録内容をMarkdownファイルに出力して確認（本文の全内容を含む）
+  python excel_to_backlog.py --preview
+
   # API リクエスト詳細を表示（デバッグ）
   python excel_to_backlog.py --execute --debug
 """
@@ -31,6 +34,7 @@ Excel → Backlog 課題登録ツール
 import argparse
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -109,6 +113,100 @@ def find_existing_issue(
                 return exact[0]["issueKey"]
 
     return None
+
+
+# ------------------------------------------------------------------
+# プレビューファイル生成
+# ------------------------------------------------------------------
+
+def build_master_labels(master: BacklogMaster) -> dict:
+    """
+    ID → 表示名 の逆引き辞書を生成する（プレビュー表示用）。
+    例: {10: "タスク", 3: "中", 99: "田中太郎"}
+    """
+    labels = {}
+    for name, id_ in master.issue_type_map.items():
+        labels[id_] = name
+    for name, id_ in master.priority_map.items():
+        labels[id_] = name
+    for name, id_ in master.user_map.items():
+        labels[id_] = name
+    return labels
+
+
+def generate_preview_file(
+    sources_cfg: list,
+    client: BacklogClient,
+    master: BacklogMaster,
+    output_path: Path,
+) -> int:
+    """
+    全ソースの登録予定内容を Markdown ファイルに書き出す。
+    Backlog API には接続するがデータの書き込みは行わない。
+
+    Returns
+    -------
+    int : プレビュー生成した課題の総件数
+    """
+    master_labels = build_master_labels(master)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total_issues = 0
+
+    lines = [
+        "# Backlog 課題登録 プレビュー",
+        "",
+        f"> 生成日時: {now}  ",
+        f"> ※ このファイルは登録前の確認用です。実際の登録は `--execute` で行います。",
+        "",
+        "---",
+        "",
+    ]
+
+    for source_cfg in sources_cfg:
+        name = source_cfg.get("name", "（名前なし）")
+        excel_cfg = source_cfg.get("excel", {})
+        filters_cfg = source_cfg.get("filters") or []
+        mapping_cfg = source_cfg.get("issue_mapping", {})
+
+        lines.append(f"# ソース: {name}")
+        lines.append("")
+        lines.append(f"- ファイル: `{excel_cfg.get('path', '（未設定）')}`")
+        lines.append(f"- シート: `{excel_cfg.get('sheet', '（最初のシート）')}`")
+        lines.append("")
+
+        # Excel 読み込み
+        try:
+            reader = ExcelReader(excel_cfg)
+            headers, rows = reader.read()
+        except Exception as e:
+            lines.append(f"> ⚠ Excel 読み込みエラー: {e}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            continue
+
+        filtered_rows = ExcelReader.filter_rows(rows, filters_cfg)
+        lines.append(f"対象行数: **{len(filtered_rows)} 件**（フィルター後）")
+        lines.append("")
+
+        if not filtered_rows:
+            lines.append("_対象行がありません。_")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            continue
+
+        mapper = IssueMapper(mapping_cfg, master, headers=headers)
+
+        for i, row in enumerate(filtered_rows, 1):
+            lines.append(mapper.format_preview(row, i, master_labels=master_labels))
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            total_issues += 1
+
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    return total_issues
 
 
 # ------------------------------------------------------------------
@@ -233,6 +331,7 @@ def main():
         epilog="""
 例:
   python excel_to_backlog.py                        # ドライラン（デフォルト）
+  python excel_to_backlog.py --preview              # プレビューファイルを生成
   python excel_to_backlog.py --execute              # 実際に登録/更新
   python excel_to_backlog.py --source "タスク管理表"          # ソース指定（ドライラン）
   python excel_to_backlog.py --source "タスク管理表" --execute # ソース指定して実行
@@ -251,6 +350,11 @@ def main():
         help="処理するソース名（省略時: 全ソースを処理）",
     )
     parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="登録予定の課題内容（本文全文含む）を Markdown ファイルに出力して確認する",
+    )
+    parser.add_argument(
         "--execute",
         action="store_true",
         help="実際に Backlog へ課題を作成/更新する（省略時はドライラン）",
@@ -263,6 +367,9 @@ def main():
     args = parser.parse_args()
     # デフォルトはドライラン。--execute が指定された場合のみ実処理を行う。
     dry_run = not args.execute
+
+    if args.preview and args.execute:
+        parser.error("--preview と --execute は同時に指定できません。")
 
     # 設定読み込み
     config = load_config(args.config)
@@ -294,7 +401,9 @@ def main():
     print(f"スペース    : {backlog_cfg['space_host']}")
     print(f"プロジェクト : {backlog_cfg['project_key']}")
     print(f"ソース数    : {len(sources_cfg)}")
-    if dry_run:
+    if args.preview:
+        print("モード      : PREVIEW（登録内容をMarkdownファイルに出力します）")
+    elif dry_run:
         print("モード      : DRY RUN（実際の作成/更新は行いません）")
     else:
         print("モード      : EXECUTE（Backlog に登録/更新します）")
@@ -317,6 +426,21 @@ def main():
         f"  優先度: {list(master.priority_map.keys())}\n"
         f"  メンバー数: {len(master.user_map)} 名"
     )
+
+    # --preview モード: Markdown ファイルを生成して終了
+    if args.preview:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        preview_path = Path(args.config).parent / f"preview_{timestamp}.md"
+        print(f"プレビューファイルを生成中: {preview_path}")
+        total_issues = generate_preview_file(sources_cfg, client, master, preview_path)
+        print(f"\n{'='*55}")
+        print("プレビュー生成完了")
+        print(f"{'='*55}")
+        print(f"  出力ファイル : {preview_path}")
+        print(f"  課題数      : {total_issues} 件")
+        print()
+        print("  内容を確認後、実際に登録するには --execute を付けて再実行してください。")
+        return
 
     # 各ソースを処理
     total = {"created": 0, "updated": 0, "skipped": 0, "error": 0}

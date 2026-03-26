@@ -368,3 +368,48 @@ class IssueMapper:
             if k.startswith("customField_"):
                 lines.append(f"         {k}: {v}")
         return "\n".join(lines)
+
+    def format_preview(self, row: dict[str, str], index: int, master_labels: dict = None) -> str:
+        """
+        プレビューファイル用: 課題の全内容を Markdown ブロックとして返す。
+
+        master_labels : {issueTypeId: 種別名, priorityId: 優先度名, assigneeId: ユーザー名}
+                        名前逆引き用（省略時は ID をそのまま表示）
+        """
+        try:
+            params = self.map_row(row)
+        except ValueError as e:
+            return f"## 課題 {index}\n\n> ⚠ スキップ: {e}\n"
+
+        labels = master_labels or {}
+
+        lines = [f"## 課題 {index}"]
+        lines.append("")
+
+        # 基本フィールド
+        lines.append(f"**件名:** {params.get('summary', '（なし）')}  ")
+        issue_type_label = labels.get(params.get("issueTypeId"), str(params.get("issueTypeId", "")))
+        lines.append(f"**種別:** {issue_type_label}  ")
+        priority_label = labels.get(params.get("priorityId"), str(params.get("priorityId", "")))
+        lines.append(f"**優先度:** {priority_label}  ")
+        if "dueDate" in params:
+            lines.append(f"**期限日:** {params['dueDate']}  ")
+        if "startDate" in params:
+            lines.append(f"**開始日:** {params['startDate']}  ")
+        if "assigneeId" in params:
+            assignee_label = labels.get(params["assigneeId"], str(params["assigneeId"]))
+            lines.append(f"**担当者:** {assignee_label}  ")
+        for k, v in params.items():
+            if k.startswith("customField_"):
+                lines.append(f"**{k}:** {v}  ")
+
+        # 本文（description）を全文表示
+        lines.append("")
+        lines.append("### 本文")
+        lines.append("")
+        if "description" in params and params["description"]:
+            lines.append(params["description"])
+        else:
+            lines.append("_（本文なし）_")
+
+        return "\n".join(lines)
