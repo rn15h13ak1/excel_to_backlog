@@ -226,79 +226,115 @@ def build_master_labels(master: BacklogMaster) -> dict:
     }
 
 
-def generate_preview_file(
-    sources_cfg: list,
-    client: BacklogClient,
+def _safe_filename(name: str) -> str:
+    """
+    sources[].name をファイル名として安全な文字列に変換する。
+    ファイル名に使えない文字（/ \\ : * ? " < > | など）はアンダースコアに置換し、
+    前後の空白・ドットを除去する。
+    """
+    import re as _re
+    safe = _re.sub(r'[\\/:*?"<>|\s]+', "_", name)
+    safe = safe.strip("._")
+    return safe or "source"
+
+
+def generate_preview_for_source(
+    source_cfg: dict,
     master: BacklogMaster,
+    master_labels: dict,
     output_path: Path,
+    now: str,
 ) -> int:
     """
-    全ソースの登録予定内容を Markdown ファイルに書き出す。
-    Backlog API には接続するがデータの書き込みは行わない。
+    1ソース分の登録予定内容を Markdown ファイルに書き出す。
 
     Returns
     -------
-    int : プレビュー生成した課題の総件数
+    int : プレビュー生成した課題件数
     """
-    master_labels = build_master_labels(master)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    total_issues = 0
+    name = source_cfg.get("name", "（名前なし）")
+    excel_cfg = source_cfg.get("excel", {})
+    mapping_cfg = source_cfg.get("issue_mapping", {})
 
     lines = [
-        "# Backlog 課題登録 プレビュー",
+        f"# Backlog 課題登録 プレビュー — {name}",
         "",
         f"> 生成日時: {now}  ",
         f"> ※ このファイルは登録前の確認用です。実際の登録は `--execute` で行います。",
+        "",
+        f"- ファイル: `{excel_cfg.get('path', '（未設定）')}`",
+        f"- シート: `{excel_cfg.get('sheet', '（最初のシート）')}`",
         "",
         "---",
         "",
     ]
 
-    for source_cfg in sources_cfg:
-        name = source_cfg.get("name", "（名前なし）")
-        excel_cfg = source_cfg.get("excel", {})
-        mapping_cfg = source_cfg.get("issue_mapping", {})
+    issue_count = 0
 
-        lines.append(f"# ソース: {name}")
+    # Excel 読み込み
+    try:
+        reader = ExcelReader(excel_cfg)
+        headers, rows = reader.read()
+    except Exception as e:
+        lines.append(f"> ⚠ Excel 読み込みエラー: {e}")
         lines.append("")
-        lines.append(f"- ファイル: `{excel_cfg.get('path', '（未設定）')}`")
-        lines.append(f"- シート: `{excel_cfg.get('sheet', '（最初のシート）')}`")
+        output_path.write_text("\n".join(lines), encoding="utf-8")
+        return 0
+
+    filtered_rows = apply_filters(rows, source_cfg, headers)
+    lines.append(f"対象行数: **{len(filtered_rows)} 件**（フィルター後）")
+    lines.append("")
+
+    if not filtered_rows:
+        lines.append("_対象行がありません。_")
         lines.append("")
+        output_path.write_text("\n".join(lines), encoding="utf-8")
+        return 0
 
-        # Excel 読み込み
-        try:
-            reader = ExcelReader(excel_cfg)
-            headers, rows = reader.read()
-        except Exception as e:
-            lines.append(f"> ⚠ Excel 読み込みエラー: {e}")
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-            continue
+    mapper = IssueMapper(mapping_cfg, master, headers=headers)
 
-        filtered_rows = apply_filters(rows, source_cfg, headers)
-        lines.append(f"対象行数: **{len(filtered_rows)} 件**（フィルター後）")
+    for i, row in enumerate(filtered_rows, 1):
+        enriched = inject_meta(row, source_cfg)
+        lines.append(mapper.format_preview(enriched, i, master_labels=master_labels))
         lines.append("")
-
-        if not filtered_rows:
-            lines.append("_対象行がありません。_")
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-            continue
-
-        mapper = IssueMapper(mapping_cfg, master, headers=headers)
-
-        for i, row in enumerate(filtered_rows, 1):
-            enriched = inject_meta(row, source_cfg)
-            lines.append(mapper.format_preview(enriched, i, master_labels=master_labels))
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-            total_issues += 1
+        lines.append("---")
+        lines.append("")
+        issue_count += 1
 
     output_path.write_text("\n".join(lines), encoding="utf-8")
-    return total_issues
+    return issue_count
+
+
+def generate_preview_file(
+    sources_cfg: list,
+    client: BacklogClient,
+    master: BacklogMaster,
+    output_dir: Path,
+    timestamp: str,
+) -> list[tuple[Path, int]]:
+    """
+    sources[].name の単位で Markdown プレビューファイルを生成する。
+    Backlog API には接続するがデータの書き込みは行わない。
+
+    Returns
+    -------
+    list[tuple[Path, int]]
+        各ソースの (出力ファイルパス, 課題件数) のリスト
+    """
+    master_labels = build_master_labels(master)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    results = []
+
+    for source_cfg in sources_cfg:
+        name = source_cfg.get("name", "source")
+        safe = _safe_filename(name)
+        output_path = output_dir / f"preview_{timestamp}_{safe}.md"
+        count = generate_preview_for_source(
+            source_cfg, master, master_labels, output_path, now
+        )
+        results.append((output_path, count))
+
+    return results
 
 
 # ------------------------------------------------------------------
@@ -517,14 +553,17 @@ def main():
     # --preview モード: Markdown ファイルを生成して終了
     if args.preview:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        preview_path = Path(args.config).parent / f"preview_{timestamp}.md"
-        print(f"プレビューファイルを生成中: {preview_path}")
-        total_issues = generate_preview_file(sources_cfg, client, master, preview_path)
+        output_dir = Path(args.config).parent
+        print(f"プレビューファイルを生成中...")
+        results = generate_preview_file(sources_cfg, client, master, output_dir, timestamp)
+        total_issues = sum(count for _, count in results)
         print(f"\n{'='*55}")
         print("プレビュー生成完了")
         print(f"{'='*55}")
-        print(f"  出力ファイル : {preview_path}")
-        print(f"  課題数      : {total_issues} 件")
+        for path, count in results:
+            print(f"  {path.name}  （{count} 件）")
+        print(f"{'─'*55}")
+        print(f"  合計: {total_issues} 件")
         print()
         print("  内容を確認後、実際に登録するには --execute を付けて再実行してください。")
         return
