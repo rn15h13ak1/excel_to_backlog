@@ -7,7 +7,7 @@ excel_md_tool (useExcel.ts) と同等のロジックを Python / openpyxl で実
   - ヘッダー行の範囲指定（複数行ヘッダーは " / " 結合）
   - データ開始行の指定
   - 列範囲の指定（A, B, C ... の列ラベル形式）
-  - フィルター条件（列名＋値の AND フィルター）
+  - フィルター条件（列名＋値の AND フィルター、value: 単一値 / values: 複数値 OR）
   - 日付セルは "YYYY/MM/DD" 文字列に変換
   - 空行はスキップ
 """
@@ -208,12 +208,15 @@ class ExcelReader:
         AND 条件でフィルタリングして合致する行だけを返す。
 
         filters の各要素:
-            col_name : str   対象のヘッダー名
-            value    : str   一致すべき値（部分一致: contains、デフォルト: 完全一致）
-            match    : str   "exact"（デフォルト）/ "contains" / "startswith"
+            col_name : str        対象のヘッダー名
+            value    : str        一致すべき単一値（values と排他）
+            values   : list[str]  一致すべき値のリスト（いずれかに一致すれば OK、OR 条件）
+            match    : str        "exact"（デフォルト）/ "contains" / "startswith"
+                                  value / values いずれにも適用される
 
+        複数の filter 条件は AND で評価される。
         filters が None または空の場合は全行を返す。
-        存在しない col_name は警告を出してその条件をスキップする。
+        存在しない col_name はその条件をスキップする（警告は呼び出し元で出す）。
         """
         if not filters:
             return rows
@@ -223,27 +226,31 @@ class ExcelReader:
             match_all = True
             for cond in filters:
                 col = cond.get("col_name", "")
-                expected = str(cond.get("value", ""))
                 match_type = cond.get("match", "exact")
 
                 if col not in row:
-                    # 条件列がヘッダーに存在しない場合はスキップ（警告は呼び出し元で出す）
+                    # 条件列がヘッダーに存在しない場合はスキップ
                     continue
 
                 actual = row[col]
 
+                # values（リスト）が指定されていれば OR マッチ、なければ単一 value でマッチ
+                raw_values = cond.get("values")
+                if raw_values is not None:
+                    candidates = [str(v) for v in raw_values]
+                else:
+                    candidates = [str(cond.get("value", ""))]
+
                 if match_type == "contains":
-                    if expected not in actual:
-                        match_all = False
-                        break
+                    matched = any(c in actual for c in candidates)
                 elif match_type == "startswith":
-                    if not actual.startswith(expected):
-                        match_all = False
-                        break
+                    matched = any(actual.startswith(c) for c in candidates)
                 else:  # exact
-                    if actual != expected:
-                        match_all = False
-                        break
+                    matched = actual in candidates
+
+                if not matched:
+                    match_all = False
+                    break
 
             if match_all:
                 result.append(row)
