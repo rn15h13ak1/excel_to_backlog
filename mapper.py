@@ -223,16 +223,16 @@ class IssueMapper:
         件名文字列から特殊文字を除去・正規化して返す。
 
         処理内容:
-          - 改行（\\r\\n / \\n / \\r）をスペースに置換
-          - タブ（\\t）をスペースに置換
+          - 改行（\\r\\n / \\n / \\r）を除去
+          - タブ（\\t）を除去
           - 連続スペースを1つに圧縮
           - 先頭・末尾のスペースを除去
 
         match_summary: true の比較にも同じメソッドを使うことで
         検索キーと Backlog 保存済み件名の表記を統一する。
         """
-        normalized = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
-        normalized = normalized.replace("\t", " ")
+        normalized = text.replace("\r\n", "").replace("\r", "").replace("\n", "")
+        normalized = normalized.replace("\t", "")
         normalized = re.sub(r" {2,}", " ", normalized)
         return normalized.strip()
 
