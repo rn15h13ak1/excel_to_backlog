@@ -214,6 +214,29 @@ class IssueMapper:
         return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
+    # 件名の正規化
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def normalize_summary(text: str) -> str:
+        """
+        件名文字列から特殊文字を除去・正規化して返す。
+
+        処理内容:
+          - 改行（\\r\\n / \\n / \\r）をスペースに置換
+          - タブ（\\t）をスペースに置換
+          - 連続スペースを1つに圧縮
+          - 先頭・末尾のスペースを除去
+
+        match_summary: true の比較にも同じメソッドを使うことで
+        検索キーと Backlog 保存済み件名の表記を統一する。
+        """
+        normalized = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+        normalized = normalized.replace("\t", " ")
+        normalized = re.sub(r" {2,}", " ", normalized)
+        return normalized.strip()
+
+    # ------------------------------------------------------------------
     # 各フィールドの解決
     # ------------------------------------------------------------------
 
@@ -350,16 +373,17 @@ class IssueMapper:
 
         # 必須: summary（件名）
         # summary_template が指定されていればテンプレート展開、なければ summary_col の値を使用
+        # いずれの場合も normalize_summary() で改行・タブなどの特殊文字を除去する
         summary_template = self.cfg.get("summary_template", "")
         if summary_template:
-            summary = self._render_template(summary_template, row).strip()
+            summary = self.normalize_summary(self._render_template(summary_template, row))
             if not summary:
                 raise ValueError(
                     f"summary_template の展開結果が空です。この行はスキップします。"
                 )
         else:
             summary_col = self.cfg.get("summary_col", "")
-            summary = row.get(summary_col, "").strip()
+            summary = self.normalize_summary(row.get(summary_col, ""))
             if not summary:
                 raise ValueError(
                     f"件名列「{summary_col}」の値が空です。この行はスキップします。"

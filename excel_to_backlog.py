@@ -104,11 +104,16 @@ def find_existing_issue(
             return None
 
     # ② 件名で検索
+    # params["summary"] は map_row() で normalize_summary() 済みのため、
+    # Backlog 側の既存件名も同じ正規化を適用して比較することで表記の揺れを吸収する
     if upsert_cfg.get("match_summary"):
         summary = params.get("summary", "")
         if summary:
             candidates = client.search_issues_by_summary(master.project_id, summary)
-            exact = [i for i in candidates if i.get("summary") == summary]
+            exact = [
+                i for i in candidates
+                if IssueMapper.normalize_summary(i.get("summary", "")) == summary
+            ]
             if exact:
                 return exact[0]["issueKey"]
 
