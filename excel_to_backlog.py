@@ -424,8 +424,10 @@ def process_source(
                         client.update_issue(existing_key, update_params)
                         print(f"  [{i}] ✅ 更新: {existing_key} — {params.get('summary', '')}")
                         counts["updated"] += 1
-                    except BacklogNoChangeError:
+                    except BacklogNoChangeError as nce:
+                        # 実際の Backlog エラーメッセージを表示して誤検出を確認できるようにする
                         print(f"  [{i}] — スキップ（変更なし）: {existing_key} — {params.get('summary', '')}")
+                        print(f"    Backlog message: {nce}", file=sys.stderr)
                         counts["skipped"] += 1
                         continue
                 else:

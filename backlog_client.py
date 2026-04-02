@@ -91,10 +91,12 @@ class BacklogClient:
             pass
 
         # 変更なしエラーの検出: 更新時に HTTP 400 + error code 7 が返る
+        # ※ error code 7 は InvalidRequestError 全般に使われる汎用コードのため
+        #   誤検出の可能性がある。呼び出し元で実際のメッセージをログに出力して確認すること。
         if raise_no_change and e.code == 400 and any(
             err.get("code") == 7 for err in errors
         ):
-            raise BacklogNoChangeError(detail or "変更内容が同一のためスキップ")
+            raise BacklogNoChangeError(detail or "HTTP 400 / code 7（変更なしと判断）")
 
         print(
             f"エラー: API呼び出しに失敗しました（HTTP {e.code}）: {endpoint}",
