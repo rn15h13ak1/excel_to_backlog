@@ -24,6 +24,7 @@ class BacklogMaster:
     issue_type_map: dict[str, int] = field(default_factory=dict)   # {種別名: ID}
     priority_map: dict[str, int] = field(default_factory=dict)     # {優先度名: ID}
     user_map: dict[str, int] = field(default_factory=dict)         # {ユーザー名: ID}
+    status_map: dict[str, int] = field(default_factory=dict)       # {ステータス名: ID}
     # {属性名: {id, typeId, items: {選択肢名: ID}}}
     custom_field_map: dict[str, dict] = field(default_factory=dict)
 
@@ -84,6 +85,14 @@ class BacklogMaster:
         except SystemExit:
             print("  ⚠ カスタム属性の取得に失敗しました", file=sys.stderr)
 
+        # ステータス
+        print("  ステータス一覧を取得中...")
+        try:
+            statuses = client.get_statuses(project_key)
+            master.status_map = {s["name"]: s["id"] for s in statuses}
+        except SystemExit:
+            print("  ⚠ ステータスの取得に失敗しました", file=sys.stderr)
+
         return master
 
 
@@ -111,6 +120,11 @@ class IssueMapper:
         custom_fields       : list       カスタム属性マッピングリスト
             - field_name    : str        Backlog カスタム属性名
               col_name      : str        Excel 列名
+        status_col          : str        Excel のステータス列名（任意）
+        status_map          : dict       Excel ステータス値 → Backlog ステータス名 のマッピング（任意）
+                                         例: {"未着手": "未対応", "対応中": "処理中", "完了": "完了"}
+                                         status_col が設定されている場合に使用。
+                                         マッピングに存在しない値はスキップ（警告を出力）。
     description_format : str  "template"（デフォルト）または "auto"
         "auto" の場合は description_template を無視し、excel_md_tool と同じ形式で
         列名を見出し・セル値を本文として自動生成する。
@@ -287,6 +301,40 @@ class IssueMapper:
             )
         return uid
 
+    def _resolve_status_id(self, row: dict[str, str]) -> int | None:
+        """
+        status_col と status_map の設定に従い、Backlog ステータス ID を解決する。
+
+        Config キー:
+            status_col : str   Excel のステータス列名
+            status_map : dict  Excel ステータス値 → Backlog ステータス名 のマッピング
+                               例: {"未着手": "未対応", "対応中": "処理中"}
+        """
+        status_col = self.cfg.get("status_col")
+        if not status_col:
+            return None
+        excel_status = row.get(status_col, "").strip()
+        if not excel_status:
+            return None
+        status_map_cfg = self.cfg.get("status_map") or {}
+        backlog_status_name = status_map_cfg.get(excel_status)
+        if backlog_status_name is None:
+            print(
+                f"  ⚠ ステータス「{excel_status}」は status_map に定義されていません（スキップ）",
+                file=sys.stderr,
+            )
+            return None
+        sid = self.master.status_map.get(backlog_status_name)
+        if sid is None:
+            available = list(self.master.status_map.keys())
+            print(
+                f"  ⚠ Backlog ステータス「{backlog_status_name}」が見つかりません（スキップ）\n"
+                f"    利用可能: {available}",
+                file=sys.stderr,
+            )
+            return None
+        return sid
+
     @staticmethod
     def _normalize_date(value: str) -> str | None:
         """
@@ -441,6 +489,11 @@ class IssueMapper:
         # 任意: カスタム属性
         params.update(self._resolve_custom_fields(row))
 
+        # 任意: statusId（ステータス）
+        status_id = self._resolve_status_id(row)
+        if status_id is not None:
+            params["statusId"] = status_id
+
         return params
 
     def format_dry_run(self, row: dict[str, str], index: int) -> str:
@@ -492,6 +545,7 @@ class IssueMapper:
         issue_type_labels = labels.get("issue_type", {})
         priority_labels   = labels.get("priority", {})
         user_labels       = labels.get("user", {})
+        status_labels     = labels.get("status", {})
 
         lines = [f"## 課題 {index}"]
         lines.append("")
@@ -509,6 +563,9 @@ class IssueMapper:
         if "assigneeId" in params:
             assignee_label = user_labels.get(params["assigneeId"], str(params["assigneeId"]))
             lines.append(f"**担当者:** {assignee_label}  ")
+        if "statusId" in params:
+            status_label = status_labels.get(params["statusId"], str(params["statusId"]))
+            lines.append(f"**ステータス:** {status_label}  ")
         for k, v in params.items():
             if k.startswith("customField_"):
                 lines.append(f"**{k}:** {v}  ")

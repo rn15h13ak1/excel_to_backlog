@@ -222,6 +222,7 @@ def build_master_labels(master: BacklogMaster) -> dict:
           "issue_type": {id: 種別名, ...},
           "priority":   {id: 優先度名, ...},
           "user":       {id: ユーザー名, ...},
+          "status":     {id: ステータス名, ...},
         }
     """
     # user_map には同一ユーザーの表示名・ログインIDが両方登録されているため、
@@ -235,6 +236,7 @@ def build_master_labels(master: BacklogMaster) -> dict:
         "issue_type": {id_: name for name, id_ in master.issue_type_map.items()},
         "priority":   {id_: name for name, id_ in master.priority_map.items()},
         "user":       user_labels,
+        "status":     {id_: name for name, id_ in master.status_map.items()},
     }
 
 
@@ -597,6 +599,7 @@ def main():
     print(
         f"  種別: {list(master.issue_type_map.keys())}\n"
         f"  優先度: {list(master.priority_map.keys())}\n"
+        f"  ステータス: {list(master.status_map.keys())}\n"
         f"  メンバー数: {len(master.user_map)} 名"
     )
 
