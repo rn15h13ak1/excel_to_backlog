@@ -32,6 +32,7 @@ Excel → Backlog 課題登録ツール
 """
 
 import argparse
+import re
 import sys
 import time
 from datetime import datetime
@@ -246,8 +247,7 @@ def _safe_filename(name: str) -> str:
     ファイル名に使えない文字（/ \\ : * ? " < > | など）はアンダースコアに置換し、
     前後の空白・ドットを除去する。
     """
-    import re as _re
-    safe = _re.sub(r'[\\/:*?"<>|\s]+', "_", name)
+    safe = re.sub(r'[\\/:*?"<>|\s]+', "_", name)
     safe = safe.strip("._")
     return safe or "source"
 
@@ -415,7 +415,7 @@ def process_source(
     try:
         reader = ExcelReader(excel_cfg)
         headers, rows = reader.read()
-    except (FileNotFoundError, ValueError, Exception) as e:
+    except Exception as e:
         print(f"\n  エラー: Excel の読み込みに失敗しました: {e}", file=sys.stderr)
         counts["error"] += 1
         return counts
