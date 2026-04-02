@@ -60,6 +60,7 @@ sources:
       #   values: ["未着手", "対応中"]   # 複数値のいずれかに一致（OR）
 
     # --- filter_groups 方式（複合キーで特定行をペア指定）---
+    # ※ filters と filter_groups を両方指定した場合は filter_groups が優先される（filters は無視）。
     # filter_groups:
     #   - filters:                     # グループ1: 項番=1 かつ 枝番=A
     #       - col_name: "項番"
@@ -103,8 +104,9 @@ sources:
 
       # ----------------------------------------------------------------
       # 本文（description）の生成方式: "template" または "auto"
+      # description_format を省略した場合は "template" が適用される。
       # ----------------------------------------------------------------
-      # [template] description_template に記述したMarkdownを使用（デフォルト）
+      # [template] description_template に記述したMarkdownを使用（省略時のデフォルト）
       #   {{列名}} の部分がセル値に置換される
       #   特殊プレースホルダー {{auto}} を使うと auto 方式の出力を任意の位置に展開できる
       #   → auto 出力にヘッダー・フッターを追加したい場合はこの方法を使う
@@ -186,6 +188,9 @@ sources:
     upsert:
       enabled: false                  # true: 既存課題を更新 / false: 常に新規作成
       # 重複判定方法（enabled: true の場合、どちらか一方を設定）
+      # ※ key_col と match_summary を両方指定した場合は key_col が優先される。
+      #   key_col の列に値がある行は issueKey で検索・更新し、
+      #   値がない行のみ match_summary による件名検索にフォールバックする。
       # key_col: "Backlog課題番号"    # Excel にissueKey（例: PROJ-123）を書いた列
       # match_summary: true           # 件名が一致する課題を検索して更新
 
