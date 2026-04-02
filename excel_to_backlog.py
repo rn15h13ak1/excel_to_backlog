@@ -307,14 +307,13 @@ def generate_preview_for_source(
 
 def generate_preview_file(
     sources_cfg: list,
-    client: BacklogClient,
     master: BacklogMaster,
     output_dir: Path,
     timestamp: str,
 ) -> list[tuple[Path, int]]:
     """
     sources[].name の単位で Markdown プレビューファイルを生成する。
-    Backlog API には接続するがデータの書き込みは行わない。
+    Backlog API のデータ書き込みは行わない。
 
     Returns
     -------
@@ -555,7 +554,7 @@ def main():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = Path(args.config).parent
         print(f"プレビューファイルを生成中...")
-        results = generate_preview_file(sources_cfg, client, master, output_dir, timestamp)
+        results = generate_preview_file(sources_cfg, master, output_dir, timestamp)
         total_issues = sum(count for _, count in results)
         print(f"\n{'='*55}")
         print("プレビュー生成完了")
