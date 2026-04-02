@@ -344,6 +344,35 @@ def generate_preview_file(
 
 
 # ------------------------------------------------------------------
+# 新規作成の確認
+# ------------------------------------------------------------------
+
+def confirm_create(params: dict, index: int) -> bool:
+    """
+    新規作成前にユーザーへ確認を求める。
+    y / yes を入力した場合のみ True を返す。デフォルトは No（スキップ）。
+
+    表示する情報:
+        件名・種別ID・優先度ID・期限日（設定されている場合）
+    """
+    summary   = params.get("summary", "（件名なし）")
+    due_date  = params.get("dueDate", "")
+
+    print(f"\n  [{index}] 新規作成の確認:")
+    print(f"    件名  : {summary}")
+    if due_date:
+        print(f"    期限日: {due_date}")
+
+    try:
+        answer = input("    Backlog に新規作成しますか？ [y/N]: ").strip().lower()
+    except EOFError:
+        # 非対話環境（パイプ等）ではデフォルト No
+        answer = ""
+
+    return answer in ("y", "yes")
+
+
+# ------------------------------------------------------------------
 # 1ソースの処理
 # ------------------------------------------------------------------
 
@@ -431,10 +460,18 @@ def process_source(
                         counts["skipped"] += 1
                         continue
                 else:
+                    if not confirm_create(params, i):
+                        print(f"  [{i}] — スキップ（新規作成をキャンセル）: {params.get('summary', '')}")
+                        counts["skipped"] += 1
+                        continue
                     issue = client.create_issue(params)
                     print(f"  [{i}] ✅ 作成: {issue['issueKey']} — {issue['summary']}")
                     counts["created"] += 1
             else:
+                if not confirm_create(params, i):
+                    print(f"  [{i}] — スキップ（新規作成をキャンセル）: {params.get('summary', '')}")
+                    counts["skipped"] += 1
+                    continue
                 issue = client.create_issue(params)
                 print(f"  [{i}] ✅ 作成: {issue['issueKey']} — {issue['summary']}")
                 counts["created"] += 1
