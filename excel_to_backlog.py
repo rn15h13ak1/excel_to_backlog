@@ -219,10 +219,17 @@ def build_master_labels(master: BacklogMaster) -> dict:
           "user":       {id: ユーザー名, ...},
         }
     """
+    # user_map には同一ユーザーの表示名・ログインIDが両方登録されているため、
+    # ID が初出のエントリ（登録順で先に来る表示名）のみを逆引きに採用する
+    user_labels: dict[int, str] = {}
+    for name, id_ in master.user_map.items():
+        if id_ not in user_labels:
+            user_labels[id_] = name
+
     return {
         "issue_type": {id_: name for name, id_ in master.issue_type_map.items()},
         "priority":   {id_: name for name, id_ in master.priority_map.items()},
-        "user":       {id_: name for name, id_ in master.user_map.items()},
+        "user":       user_labels,
     }
 
 
