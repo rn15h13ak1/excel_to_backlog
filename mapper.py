@@ -97,17 +97,20 @@ class IssueMapper:
     Excel の行データを Backlog API パラメータに変換する。
 
     mapping_config キー:
-        issue_type          : str   種別名（固定値）
-        priority            : str   優先度名（固定値、デフォルト: "中"）
-        summary_col         : str   件名として使う列名（summary_template と排他）
-        summary_template    : str   件名テンプレート（{{列名}} でセル値を埋め込み、summary_col より優先）
-        description_template: str   詳細欄テンプレート（{{列名}} でセル値を埋め込み）
-        due_date_col        : str   期限日列名、または {{列名}} テンプレート（任意）
-        start_date_col      : str   開始日列名、または {{列名}} テンプレート（任意）
-        assignee_col        : str   担当者列名（任意）
-        custom_fields       : list  カスタム属性マッピングリスト
-            - field_name    : str   Backlog カスタム属性名
-              col_name      : str   Excel 列名
+        issue_type          : str        種別名（固定値）
+        priority            : str        優先度名（固定値、デフォルト: "中"）
+        summary_col         : str        件名として使う列名（summary_template と排他）
+        summary_template    : str        件名テンプレート（{{列名}} でセル値を埋め込み、summary_col より優先）
+        description_template: str        詳細欄テンプレート（{{列名}} でセル値を埋め込み）
+        due_date_col        : str        期限日列名、または {{列名}} テンプレート（任意）
+        start_date_col      : str        開始日列名、または {{列名}} テンプレート（任意）
+        assignee_col        : str        担当者列名（任意）
+        required_cols       : list[str]  値が空の場合にスキップする列名リスト（任意）
+                                         リスト内のいずれか1列でも空であればその行を処理しない。
+                                         項番だけ記入されその他が未記入の行を除外したい場合などに使用。
+        custom_fields       : list       カスタム属性マッピングリスト
+            - field_name    : str        Backlog カスタム属性名
+              col_name      : str        Excel 列名
     description_format : str  "template"（デフォルト）または "auto"
         "auto" の場合は description_template を無視し、excel_md_tool と同じ形式で
         列名を見出し・セル値を本文として自動生成する。
@@ -333,6 +336,14 @@ class IssueMapper:
             Backlog API の create_issue / update_issue に渡せるパラメータ dict
         """
         params: dict = {}
+
+        # required_cols チェック: 指定列のいずれかが空ならスキップ
+        required_cols = self.cfg.get("required_cols") or []
+        empty_cols = [col for col in required_cols if not row.get(col, "").strip()]
+        if empty_cols:
+            raise ValueError(
+                f"必須列が空のためスキップします。空の列: {empty_cols}"
+            )
 
         # 必須: projectId
         params["projectId"] = self.master.project_id
