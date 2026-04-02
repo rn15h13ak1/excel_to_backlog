@@ -274,14 +274,29 @@ class BacklogClient:
 
     def search_issues_by_summary(self, project_id: int, summary: str) -> list:
         """
-        件名の前方一致で課題を検索して返す。
+        件名の前方一致で課題を検索して全件返す（ページネーション対応）。
         Backlog API に全文検索はないため keyword パラメータを利用する。
+        1 リクエストあたりの上限（100 件）を超えるプロジェクトでも取得漏れが
+        発生しないよう、get_issues() と同様にページネーションで全件取得する。
         """
-        return self._get("/issues", {
-            "projectId": [project_id],
-            "keyword": summary,
-            "count": 100,
-        })
+        all_issues = []
+        offset = 0
+        count = 100
+        while True:
+            issues = self._get("/issues", {
+                "projectId": [project_id],
+                "keyword": summary,
+                "count": count,
+                "offset": offset,
+            })
+            if not issues:
+                break
+            all_issues.extend(issues)
+            if len(issues) < count:
+                break
+            offset += count
+            time.sleep(0.3)
+        return all_issues
 
     # ------------------------------------------------------------------
     # 課題の作成・更新
