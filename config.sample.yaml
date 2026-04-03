@@ -159,6 +159,10 @@ sources:
       # due_date_col: "{{終了年}}/{{終了月}}/{{終了日}}"  # 複数列から組み立てる例
       # start_date_col: "開始日"      # 開始日列名（任意）
       assignee_col: "担当者"          # 担当者列名（Backlog の表示名 or ログインID と一致する必要あり）
+      # default_assignee: "yamada"  # 担当者のデフォルト値（任意）
+                                    # assignee_col が未設定、またはセルが空の場合に適用される。
+                                    # Backlog の表示名 or ログインID で指定。
+                                    # セルに値がある場合はセル値が優先される。
 
       # ステータスのコントロール（任意）
       # status_col に Excel のステータス列名を指定し、

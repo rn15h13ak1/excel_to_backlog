@@ -114,6 +114,10 @@ class IssueMapper:
         due_date_col        : str        期限日列名、または {{列名}} テンプレート（任意）
         start_date_col      : str        開始日列名、または {{列名}} テンプレート（任意）
         assignee_col        : str        担当者列名（任意）
+        default_assignee    : str        担当者のデフォルト値（任意）
+                                         assignee_col が未設定、またはセルが空の場合に使用する
+                                         担当者名（Backlog 表示名 or ログインID）。
+                                         セルに値がある場合はセル値が優先される。
         required_cols       : list[str]  値が空の場合にスキップする列名リスト（任意）
                                          リスト内のいずれか1列でも空であればその行を処理しない。
                                          項番だけ記入されその他が未記入の行を除外したい場合などに使用。
@@ -280,11 +284,20 @@ class IssueMapper:
 
     def _resolve_assignee_id(self, row: dict[str, str]) -> int | None:
         col = self.cfg.get("assignee_col")
-        if not col:
-            return None
-        name = row.get(col, "").strip()
+        default = self.cfg.get("default_assignee", "").strip()
+
+        # Excel 列からユーザー名を取得。列が未設定または空の場合は default_assignee にフォールバック
+        if col:
+            name = row.get(col, "").strip()
+        else:
+            name = ""
+
         if not name:
-            return None
+            # default_assignee が設定されていなければ担当者なし
+            if not default:
+                return None
+            name = default
+
         uid = self.master.user_map.get(name)
         if uid is None:
             # 重複のない表示名リストを作成（name と userId で同じ id が入るため）
