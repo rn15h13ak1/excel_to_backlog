@@ -124,6 +124,11 @@ class IssueMapper:
         custom_fields       : list       カスタム属性マッピングリスト
             - field_name    : str        Backlog カスタム属性名
               col_name      : str        Excel 列名
+              value_map     : dict       Excel 値 → Backlog 値 の変換テーブル（任意）
+                                         定義した場合は Excel のセル値をテーブルで変換してから Backlog に渡す。
+                                         テーブルに存在しない値はスキップ（警告を出力）。
+                                         省略時は Excel のセル値をそのまま使用する。
+                                         例: {"A": "カテゴリA", "B": "カテゴリB"}
         status_col          : str        Excel のステータス列名（任意）
         status_map          : dict       Excel ステータス値 → Backlog ステータス名 のマッピング（任意）
                                          例: {"未着手": "未対応", "対応中": "処理中", "完了": "完了"}
@@ -388,6 +393,18 @@ class IssueMapper:
             value = row.get(col_name, "").strip()
             if not value:
                 continue
+
+            # value_map が定義されている場合は Excel 値を Backlog 値に変換する
+            value_map = cf_cfg.get("value_map") or {}
+            if value_map:
+                mapped = value_map.get(value)
+                if mapped is None:
+                    print(
+                        f"  ⚠ カスタム属性「{field_name}」の値「{value}」は value_map に定義されていません（スキップ）",
+                        file=sys.stderr,
+                    )
+                    continue
+                value = str(mapped).strip()
 
             # 選択肢型（typeId 5=単一リスト, 6=複数, 7=チェックボックス, 8=ラジオ）
             # → 選択肢名を ID に変換

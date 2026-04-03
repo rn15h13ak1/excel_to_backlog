@@ -187,6 +187,13 @@ sources:
       # custom_fields:
       #   - field_name: "カテゴリ"    # Backlog のカスタム属性名
       #     col_name: "分類"          # Excel の列名
+      #     # value_map を省略した場合は Excel のセル値をそのまま Backlog に渡す。
+      #     # Excel の値と Backlog の値が異なる場合に value_map で変換テーブルを定義する。
+      #     # value_map に存在しない値はスキップ（警告を出力）。
+      #     # value_map:
+      #     #   "A": "カテゴリA"
+      #     #   "B": "カテゴリB"
+      #     #   "その他": "未分類"
 
     # 重複チェック・更新設定
     upsert:
