@@ -395,9 +395,20 @@ class IssueMapper:
                 continue
 
             # value_map が定義されている場合は Excel 値を Backlog 値に変換する
+            # マッチング順序:
+            #   1. 完全一致（dict.get）→ 後方互換・高速
+            #   2. 定義順に re.fullmatch でパターンマッチ → 最初にマッチしたキーを採用
             value_map = cf_cfg.get("value_map") or {}
             if value_map:
                 mapped = value_map.get(value)
+                if mapped is None:
+                    for pattern, target in value_map.items():
+                        try:
+                            if re.fullmatch(str(pattern), value):
+                                mapped = target
+                                break
+                        except re.error:
+                            pass  # 不正な正規表現はスキップ
                 if mapped is None:
                     print(
                         f"  ⚠ カスタム属性「{field_name}」の値「{value}」は value_map に定義されていません（スキップ）",
