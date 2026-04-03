@@ -404,7 +404,7 @@ class IssueMapper:
                 if mapped is None:
                     for pattern, target in value_map.items():
                         try:
-                            if re.fullmatch(str(pattern), value):
+                            if re.fullmatch(str(pattern), value, re.DOTALL):
                                 mapped = target
                                 break
                         except re.error:
