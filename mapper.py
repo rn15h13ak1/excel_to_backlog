@@ -124,6 +124,11 @@ class IssueMapper:
         custom_fields       : list       カスタム属性マッピングリスト
             - field_name    : str        Backlog カスタム属性名
               col_name      : str        Excel 列名
+              value_separator: str       セル値の区切り文字（任意）。指定すると分割した各値を
+                                         個別に value_map で変換・items_map で解決し、
+                                         複数IDのリストとして渡す（複数選択型 typeId 6・7 向け）。
+                                         省略時は分割せず1値として処理。
+              value_map     : dict       Excel 値 → Backlog 値 の変換テーブル（任意）
               value_map     : dict       Excel 値 → Backlog 値 の変換テーブル（任意）
                                          定義した場合は Excel のセル値をテーブルで変換してから Backlog に渡す。
                                          テーブルに存在しない値はスキップ（警告を出力）。
@@ -394,43 +399,67 @@ class IssueMapper:
             if not value:
                 continue
 
-            # value_map が定義されている場合は Excel 値を Backlog 値に変換する
+            # value_separator が定義されている場合はセル値を分割して複数値として扱う
+            # 省略時は分割せず1値として処理（後方互換）
+            separator = cf_cfg.get("value_separator")
+            raw_values = (
+                [v.strip() for v in value.split(separator) if v.strip()]
+                if separator
+                else [value]
+            )
+
+            # value_map が定義されている場合は各値を Backlog 値に変換する
             # マッチング順序:
             #   1. 完全一致（dict.get）→ 後方互換・高速
             #   2. 定義順に re.fullmatch でパターンマッチ → 最初にマッチしたキーを採用
             value_map = cf_cfg.get("value_map") or {}
-            if value_map:
-                mapped = value_map.get(value)
-                if mapped is None:
-                    for pattern, target in value_map.items():
-                        try:
-                            if re.fullmatch(str(pattern), value, re.DOTALL):
-                                mapped = target
-                                break
-                        except re.error:
-                            pass  # 不正な正規表現はスキップ
-                if mapped is None:
-                    print(
-                        f"  ⚠ カスタム属性「{field_name}」の値「{value}」は value_map に定義されていません（スキップ）",
-                        file=sys.stderr,
-                    )
-                    continue
-                value = str(mapped).strip()
+            mapped_values: list[str] = []
+            skip = False
+            for raw in raw_values:
+                if value_map:
+                    mapped = value_map.get(raw)
+                    if mapped is None:
+                        for pattern, target in value_map.items():
+                            try:
+                                if re.fullmatch(str(pattern), raw, re.DOTALL):
+                                    mapped = target
+                                    break
+                            except re.error:
+                                pass  # 不正な正規表現はスキップ
+                    if mapped is None:
+                        print(
+                            f"  ⚠ カスタム属性「{field_name}」の値「{raw}」は value_map に定義されていません（スキップ）",
+                            file=sys.stderr,
+                        )
+                        skip = True
+                        break
+                    mapped_values.append(str(mapped).strip())
+                else:
+                    mapped_values.append(raw)
+            if skip:
+                continue
 
             # 選択肢型（typeId 5=単一リスト, 6=複数, 7=チェックボックス, 8=ラジオ）
-            # → 選択肢名を ID に変換
+            # → 選択肢名を ID に変換してリストで渡す
             list_types = {5, 6, 7, 8}
             if type_id in list_types and items_map:
-                resolved = items_map.get(value)
-                if resolved is None:
-                    print(
-                        f"  ⚠ カスタム属性「{field_name}」の選択肢「{value}」が見つかりません（スキップ）",
-                        file=sys.stderr,
-                    )
+                resolved_ids = []
+                for mv in mapped_values:
+                    resolved = items_map.get(mv)
+                    if resolved is None:
+                        print(
+                            f"  ⚠ カスタム属性「{field_name}」の選択肢「{mv}」が見つかりません（スキップ）",
+                            file=sys.stderr,
+                        )
+                        skip = True
+                        break
+                    resolved_ids.append(resolved)
+                if skip:
                     continue
-                params[f"customField_{field_id}"] = [resolved]
+                params[f"customField_{field_id}"] = resolved_ids
             else:
-                params[f"customField_{field_id}"] = value
+                # 非選択肢型は最初の値のみ使用（value_separator は実質無効）
+                params[f"customField_{field_id}"] = mapped_values[0] if mapped_values else value
 
         return params
 
