@@ -139,18 +139,22 @@ class BacklogClient:
         """POST リクエストを送信して JSON を返す"""
         url = f"{self.base_url}{endpoint}?apiKey={urllib.parse.quote(self.api_key)}"
 
-        # リスト値を展開（例: categoryId[] → categoryId%5B%5D=1&...）
+        # リスト値を展開（例: categoryId[] → categoryId[]=1&...）
+        # キー名はエンコードせず [] をそのまま送信する。
+        # urllib.parse.urlencode はキーの [] を %5B%5D にエンコードするため、
+        # Backlog API がリスト表記を認識できなくなる。値のみ quote_plus でエンコードする。
         body_parts = []
         for key, value in params.items():
             if isinstance(value, list):
                 for v in value:
-                    body_parts.append(
-                        (f"{key}[]", str(v))
-                    )
+                    body_parts.append((f"{key}[]", str(v)))
             else:
                 body_parts.append((key, str(value)))
 
-        body = urllib.parse.urlencode(body_parts).encode("utf-8")
+        body = "&".join(
+            f"{k}={urllib.parse.quote_plus(v)}"
+            for k, v in body_parts
+        ).encode("utf-8")
 
         if self.debug:
             print(f"  [DEBUG POST] {endpoint}", file=sys.stderr)
@@ -173,6 +177,7 @@ class BacklogClient:
         """PATCH リクエストを送信して JSON を返す"""
         url = f"{self.base_url}{endpoint}?apiKey={urllib.parse.quote(self.api_key)}"
 
+        # _post() と同じ理由でキー名の [] をエンコードせず値のみ quote_plus でエンコードする
         body_parts = []
         for key, value in params.items():
             if isinstance(value, list):
@@ -181,7 +186,10 @@ class BacklogClient:
             else:
                 body_parts.append((key, str(value)))
 
-        body = urllib.parse.urlencode(body_parts).encode("utf-8")
+        body = "&".join(
+            f"{k}={urllib.parse.quote_plus(v)}"
+            for k, v in body_parts
+        ).encode("utf-8")
 
         if self.debug:
             print(f"  [DEBUG PATCH] {endpoint}", file=sys.stderr)
