@@ -169,7 +169,17 @@ class BacklogClient:
         )
         try:
             with urllib.request.urlopen(req, timeout=30, context=self.ssl_context) as res:
-                return json.loads(res.read().decode("utf-8"))
+                result = json.loads(res.read().decode("utf-8"))
+                if self.debug:
+                    custom_fields = result.get("customFields", [])
+                    if custom_fields:
+                        print(f"  [DEBUG POST response] customFields:", file=sys.stderr)
+                        for cf in custom_fields:
+                            val = cf.get("value")
+                            print(f"    id={cf.get('id')} name={cf.get('name')!r} value={val!r}", file=sys.stderr)
+                    else:
+                        print(f"  [DEBUG POST response] customFields: (なし または 空)", file=sys.stderr)
+                return result
         except urllib.error.HTTPError as e:
             self._handle_http_error(e, endpoint)
 
@@ -204,7 +214,18 @@ class BacklogClient:
         )
         try:
             with urllib.request.urlopen(req, timeout=30, context=self.ssl_context) as res:
-                return json.loads(res.read().decode("utf-8"))
+                result = json.loads(res.read().decode("utf-8"))
+                if self.debug:
+                    # カスタム属性の反映確認用: レスポンスのカスタム属性フィールドを出力
+                    custom_fields = result.get("customFields", [])
+                    if custom_fields:
+                        print(f"  [DEBUG PATCH response] customFields:", file=sys.stderr)
+                        for cf in custom_fields:
+                            val = cf.get("value")
+                            print(f"    id={cf.get('id')} name={cf.get('name')!r} value={val!r}", file=sys.stderr)
+                    else:
+                        print(f"  [DEBUG PATCH response] customFields: (なし または 空)", file=sys.stderr)
+                return result
         except urllib.error.HTTPError as e:
             self._handle_http_error(e, endpoint, raise_no_change=raise_no_change)
 

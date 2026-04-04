@@ -440,9 +440,21 @@ class IssueMapper:
                 continue
 
             # 選択肢型（typeId 5=単一リスト, 6=複数, 7=チェックボックス, 8=ラジオ）
-            # → 選択肢名を ID に変換してリストで渡す
-            list_types = {5, 6, 7, 8}
-            if type_id in list_types and items_map:
+            # → 選択肢名を ID に変換して渡す
+            #
+            # Backlog API のパラメータ形式:
+            #   typeId 5（単一リスト）: customField_{id}=ID     ← [] なし・単一値
+            #   typeId 6（複数リスト）: customField_{id}[]=ID   ← [] あり・複数可
+            #   typeId 7（チェックボックス）: customField_{id}[]=ID  ← [] あり・複数可
+            #   typeId 8（ラジオ）: customField_{id}=ID         ← [] なし・単一値
+            #
+            # Python の list として渡すと _post/_patch で [] 付きになるため、
+            # 単一選択型（5・8）は int として渡す（[] なし）。
+            multi_select_types = {6, 7}   # [] 付き配列形式
+            single_select_types = {5, 8}  # [] なし単一値形式
+            all_select_types = multi_select_types | single_select_types
+
+            if type_id in all_select_types and items_map:
                 resolved_ids = []
                 for mv in mapped_values:
                     resolved = items_map.get(mv)
@@ -456,7 +468,20 @@ class IssueMapper:
                     resolved_ids.append(resolved)
                 if skip:
                     continue
-                params[f"customField_{field_id}"] = resolved_ids
+
+                if type_id in multi_select_types:
+                    # 複数選択型: リストで渡す → _post/_patch が customField_{id}[] として展開
+                    params[f"customField_{field_id}"] = resolved_ids
+                else:
+                    # 単一選択型（5/8）: int で渡す → _post/_patch が customField_{id} として送信
+                    # value_separator で複数値が指定された場合でも先頭の1件のみ使用する
+                    if len(resolved_ids) > 1:
+                        print(
+                            f"  ⚠ カスタム属性「{field_name}」は単一選択型（typeId={type_id}）のため"
+                            f" 先頭の値のみ使用します: {mapped_values[0]}",
+                            file=sys.stderr,
+                        )
+                    params[f"customField_{field_id}"] = resolved_ids[0]
             else:
                 # 非選択肢型は最初の値のみ使用（value_separator は実質無効）
                 params[f"customField_{field_id}"] = mapped_values[0] if mapped_values else value
