@@ -66,36 +66,31 @@ def cell_to_markdown(cell: Any) -> str:
     対応書式:
         取り消し線（strike）→ ~~text~~
 
-    リッチテキスト対応:
-        セル内で部分的に書式が異なる場合（CellRichText）は、
-        各テキストランを個別に変換して結合する。
-        取り消し線付きランと通常ランが隣接する際、Markdown パーサーが
-        ~~ を正しく認識できるよう境界に半角スペースを自動挿入する。
+    優先順位:
+        1. CellRichText（リッチテキスト）→ ランごとの書式を使用（最優先）
+           セル全体スタイル（cell.font.strike）より細かいランレベルの情報が
+           正確なため、CellRichText の場合は run.font.strike を優先する。
+           これにより「セル内の一部のみ取り消し線」が正しく反映される。
 
-    セル全体に書式がある場合:
-        cell.font.strike == True → ~~セル値全体~~
+        2. cell.font.strike == True（CellRichText でないセル）→ ~~セル全体~~
+           日付・プレーンテキストなど CellRichText 以外のセルに適用。
 
-    書式がない場合は cell_to_str() と同じ出力になる（後方互換）。
+        3. 書式なし → cell_to_str() と同じ出力（後方互換）
+
+    備考:
+        CellRichText セルに cell.font.strike=True が付いていても無視する。
+        Excel はセルの一部に取り消し線を設定した際にセルレベルのスタイルにも
+        strike=True を記録することがあるが、正確な情報はランレベルにある。
     """
     value = cell.value
 
     if value is None:
         return ""
 
-    # ---- セル全体に取り消し線（最優先）----
-    # cell.font.strike が True の場合、値の種別（日付・文字列・CellRichText）に
-    # かかわらずプレーンテキストとして取得して ~~ で囲む。
-    # ※ CellRichText チェックより先に評価することで、日付セルや
-    #    セル全体に取り消し線が設定された CellRichText セルも正しく処理される。
-    #    （CellRichText ブランチは cell.font.strike を見ずに return するため、
-    #    後置すると日付などのセルで取り消し線が反映されない）
-    if cell.font and cell.font.strike:
-        text = cell_to_str(value)
-        return f'~~{text}~~' if text else ''
-
-    # ---- リッチテキスト（セル内部分書式）----
-    # cell.font.strike が False/None の場合のみここに到達する。
-    # 個々の TextBlock に取り消し線が設定されている場合（セル内の一部のみ取り消し線）に対応。
+    # ---- ① リッチテキスト（セル内部分書式・最優先）----
+    # CellRichText の場合はランレベルの書式を使用する。
+    # cell.font.strike は「セル全体スタイル」として Excel が自動設定することがあり、
+    # 実際のランレベルの取り消し線範囲と一致しないケースがあるため無視する。
     if _RICH_TEXT_AVAILABLE and isinstance(value, CellRichText):
         result = ""
         for run in value:
@@ -122,7 +117,14 @@ def cell_to_markdown(cell: Any) -> str:
 
         return result.strip()
 
-    # ---- 書式なし ----
+    # ---- ② セル全体に取り消し線（日付・プレーンテキスト）----
+    # CellRichText 以外（日付セル・通常テキスト）のセルで
+    # cell.font.strike が True の場合、値全体を ~~ で囲む。
+    if cell.font and cell.font.strike:
+        text = cell_to_str(value)
+        return f'~~{text}~~' if text else ''
+
+    # ---- ③ 書式なし ----
     return cell_to_str(value)
 
 
@@ -287,6 +289,49 @@ class ExcelReader:
 
         return rows
 
+    def _build_rows_dual(
+        self,
+        ws,
+        headers: list[str],
+        col_start_idx: int,
+        col_end_idx: int,
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        """
+        ワークブックを1回だけ走査し、プレーンテキスト行と書式付き Markdown 行を
+        同時に構築して返す。
+
+        plain_rows と formatted_rows は常に同じ長さ・同じ順序になることが保証される。
+        （_build_rows を2回呼ぶ方式では、rich_text オプションの有無による
+         空行判定の違いでインデックスがズレる可能性があった）
+
+        Returns
+        -------
+        plain_rows     : list[dict[str, str]]  プレーンテキスト行
+        formatted_rows : list[dict[str, str]]  書式付き Markdown 行（取り消し線 等）
+        """
+        plain_rows: list[dict[str, str]] = []
+        formatted_rows: list[dict[str, str]] = []
+        max_row = ws.max_row or 0
+
+        for row_idx in range(self.data_start_row, max_row + 1):
+            plain_data: dict[str, str] = {}
+            fmt_data: dict[str, str] = {}
+            is_empty = True
+
+            for i, col_idx in enumerate(range(col_start_idx, col_end_idx + 1)):
+                cell = ws.cell(row=row_idx, column=col_idx + 1)
+                plain = cell_to_str(cell.value)
+                if plain:
+                    is_empty = False
+                plain_data[headers[i]] = plain
+                fmt_data[headers[i]] = cell_to_markdown(cell)
+
+            if not is_empty:
+                plain_rows.append(plain_data)
+                formatted_rows.append(fmt_data)
+
+        return plain_rows, formatted_rows
+
     # ------------------------------------------------------------------
 
     def read(self) -> tuple[list[str], list[dict[str, str]]]:
@@ -312,7 +357,11 @@ class ExcelReader:
 
         書式付き行はセルの取り消し線を ~~ に変換した Markdown 文字列を持つ。
         プレーンテキスト行はフィルタリング・件名・担当者解決などに使用し、
-        書式付き行は description_format: auto の本文生成にのみ使用する。
+        書式付き行は description の本文生成にのみ使用する。
+
+        ワークブックは 1 回だけ（rich_text=True で）開き、プレーンと書式付きを
+        同一パスで構築する。これにより plain_rows と formatted_rows が
+        常に同じ長さ・同じ順序で対応することを保証する。
 
         openpyxl の rich_text オプションが利用できない場合（古いバージョン等）は
         プレーンテキストを formatted_rows としても返す（警告を出力）。
@@ -334,14 +383,13 @@ class ExcelReader:
             headers, plain_rows = self.read()
             return headers, plain_rows, plain_rows
 
-        # リッチテキストを有効にしてワークブックを開く
-        ws_plain = self._load_sheet(rich_text=False)
-        ws_fmt   = self._load_sheet(rich_text=True)
-        col_start_idx, col_end_idx = self._resolve_col_range(ws_plain)
-        headers = self._build_headers(ws_plain, col_start_idx, col_end_idx)
-
-        plain_rows     = self._build_rows(ws_plain, headers, col_start_idx, col_end_idx, use_markdown=False)
-        formatted_rows = self._build_rows(ws_fmt,   headers, col_start_idx, col_end_idx, use_markdown=True)
+        # ワークブックを rich_text=True で 1 回だけ開く。
+        # plain_rows と formatted_rows を同一パスで構築するため、
+        # 空行判定が両者で必ず一致し、インデックスがズレない。
+        ws = self._load_sheet(rich_text=True)
+        col_start_idx, col_end_idx = self._resolve_col_range(ws)
+        headers = self._build_headers(ws, col_start_idx, col_end_idx)
+        plain_rows, formatted_rows = self._build_rows_dual(ws, headers, col_start_idx, col_end_idx)
 
         return headers, plain_rows, formatted_rows
 
