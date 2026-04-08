@@ -89,17 +89,32 @@ def cell_to_markdown(cell: Any) -> str:
 
     # ---- ① リッチテキスト（セル内部分書式・最優先）----
     # CellRichText の場合はランレベルの書式を使用する。
-    # cell.font.strike は「セル全体スタイル」として Excel が自動設定することがあり、
-    # 実際のランレベルの取り消し線範囲と一致しないケースがあるため無視する。
+    # ランの strike 判定は以下の優先順位で行う（継承モデル）:
+    #   1. TextBlock かつ run.font.strike が明示的に True/False → その値を使用
+    #   2. TextBlock かつ run.font.strike が None（未設定）     → cell.font.strike を継承
+    #   3. プレーン文字列ラン（書式なし・TextBlock でない）     → cell.font.strike を継承
+    #
+    # openpyxl は Excel の <rPr> 要素を持たないランをプレーン文字列として返す。
+    # この場合そのランはセルスタイルを継承するため、cell.font.strike を適用する。
+    # これにより「先頭から取り消し線」のように先頭ランが書式なし（継承）の
+    # ケースも正しく処理できる。
+    cell_strike = bool(cell.font and cell.font.strike)
+
     if _RICH_TEXT_AVAILABLE and isinstance(value, CellRichText):
         result = ""
         for run in value:
             if isinstance(run, TextBlock):
                 text = str(run.text)
-                is_struck = bool(run.font and run.font.strike)
+                if run.font is not None and run.font.strike is not None:
+                    # 明示的な設定がある場合はその値を使用（False も有効）
+                    is_struck = bool(run.font.strike)
+                else:
+                    # 未設定はセルスタイルを継承
+                    is_struck = cell_strike
             else:
+                # プレーン文字列ラン（<rPr> なし）→ セルスタイルを継承
                 text = str(run)
-                is_struck = False
+                is_struck = cell_strike
 
             if not text:
                 continue
