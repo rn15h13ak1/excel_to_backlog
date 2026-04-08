@@ -82,7 +82,20 @@ def cell_to_markdown(cell: Any) -> str:
     if value is None:
         return ""
 
+    # ---- セル全体に取り消し線（最優先）----
+    # cell.font.strike が True の場合、値の種別（日付・文字列・CellRichText）に
+    # かかわらずプレーンテキストとして取得して ~~ で囲む。
+    # ※ CellRichText チェックより先に評価することで、日付セルや
+    #    セル全体に取り消し線が設定された CellRichText セルも正しく処理される。
+    #    （CellRichText ブランチは cell.font.strike を見ずに return するため、
+    #    後置すると日付などのセルで取り消し線が反映されない）
+    if cell.font and cell.font.strike:
+        text = cell_to_str(value)
+        return f'~~{text}~~' if text else ''
+
     # ---- リッチテキスト（セル内部分書式）----
+    # cell.font.strike が False/None の場合のみここに到達する。
+    # 個々の TextBlock に取り消し線が設定されている場合（セル内の一部のみ取り消し線）に対応。
     if _RICH_TEXT_AVAILABLE and isinstance(value, CellRichText):
         result = ""
         for run in value:
@@ -109,13 +122,8 @@ def cell_to_markdown(cell: Any) -> str:
 
         return result.strip()
 
-    # ---- セル全体に書式 ----
-    text = cell_to_str(value)
-    if not text:
-        return ""
-    if cell.font and cell.font.strike:
-        return f'~~{text}~~'
-    return text
+    # ---- 書式なし ----
+    return cell_to_str(value)
 
 
 # ------------------------------------------------------------------
