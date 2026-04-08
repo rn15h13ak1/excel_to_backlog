@@ -154,7 +154,12 @@ class IssueMapper:
     # テンプレート処理
     # ------------------------------------------------------------------
 
-    def _render_template(self, template: str, row: dict[str, str]) -> str:
+    def _render_template(
+        self,
+        template: str,
+        row: dict[str, str],
+        formatted_row: dict[str, str] | None = None,
+    ) -> str:
         """
         {{列名}} を行のセル値に置換する。
         存在しない列名はそのまま残す（警告なし）。
@@ -163,6 +168,7 @@ class IssueMapper:
           {{auto}}          : _render_auto() の出力に展開される。
                               description_format が "template" でも auto 方式の出力を
                               任意の位置に埋め込めるため、ヘッダー・フッターの付与に使える。
+                              rich_text: true のとき formatted_row を渡して取り消し線を反映する。
 
           {{#列名}}...{{/列名}} : 条件ブロック。
                               指定列の値が空でなければブロック内を出力し、
@@ -171,6 +177,12 @@ class IssueMapper:
                               例: "項番{{項番}}{{#枝番}}-{{枝番}}{{/枝番}}"
                                 → 枝番="1" → "項番1-1"
                                 → 枝番=""  → "項番1"
+
+        Parameters
+        ----------
+        formatted_row : dict[str, str] | None
+            書式付き Markdown 行（rich_text: true 時に渡す）。
+            {{auto}} の展開にのみ使用される。{{列名}} はプレーンテキスト（row）のまま。
         """
         # Step 1: 条件ブロック {{#列名}}...{{/列名}} を処理
         # 値が非空 → ブロック内テキストをそのまま残す（Step 2 でさらに展開）
@@ -191,7 +203,8 @@ class IssueMapper:
         def replacer(m: re.Match) -> str:
             col = m.group(1).strip()
             if col == "auto":
-                return self._render_auto(row)
+                # {{auto}} のみ formatted_row を渡して取り消し線を反映する
+                return self._render_auto(row, formatted_row=formatted_row)
             return row.get(col, m.group(0))  # 未マッチはそのまま
 
         return re.sub(r"\{\{(.+?)\}\}", replacer, result)
@@ -567,12 +580,13 @@ class IssueMapper:
         desc_format = self.cfg.get("description_format", "template")
         if desc_format == "auto":
             # formatted_row が渡されている場合は書式付き値を本文に使用する
-            # （rich_text: true かつ description_format: auto のときのみ渡される）
             params["description"] = self._render_auto(row, formatted_row=formatted_row)
         else:
             template = self.cfg.get("description_template", "")
             if template:
-                params["description"] = self._render_template(template, row)
+                # formatted_row を渡す: {{auto}} プレースホルダーがある場合にのみ使用される
+                # {{列名}} はプレーンテキスト（row）のままで変化しない
+                params["description"] = self._render_template(template, row, formatted_row=formatted_row)
 
         # 任意: dueDate（期限日）
         due_col = self.cfg.get("due_date_col")

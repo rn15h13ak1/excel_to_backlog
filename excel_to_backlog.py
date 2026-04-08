@@ -284,7 +284,7 @@ def generate_preview_for_source(
     ]
 
     issue_count = 0
-    use_rich_text = bool(mapping_cfg.get("rich_text")) and mapping_cfg.get("description_format") == "auto"
+    use_rich_text = bool(mapping_cfg.get("rich_text"))
 
     # Excel 読み込み
     try:
@@ -426,7 +426,7 @@ def process_source(
     print(f"  シート : {excel_cfg.get('sheet', '（最初のシート）')}")
     print(f"  upsert : {'有効' if upsert_enabled else '無効（常に新規作成）'}")
 
-    use_rich_text = bool(mapping_cfg.get("rich_text")) and mapping_cfg.get("description_format") == "auto"
+    use_rich_text = bool(mapping_cfg.get("rich_text"))
 
     # ---- Excel 読み込み ----
     try:
