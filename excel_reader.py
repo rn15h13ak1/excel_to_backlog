@@ -112,10 +112,13 @@ def cell_to_markdown(cell: Any) -> str:
                 continue
 
             if is_struck:
+                # Markdown の ~~ は改行をまたげないため、行ごとに個別に適用する
+                parts = text.split('\n')
+                formatted = '\n'.join(f'~~{p}~~' if p else '' for p in parts)
                 # ~~ の前: 直前の文字がスペース・改行でなければスペースを挿入
                 if result and result[-1] not in (' ', '\n', '\r'):
                     result += ' '
-                result += f'~~{text}~~'
+                result += formatted
             else:
                 # ~~ の直後: 現テキストがスペース・改行始まりでなければスペースを挿入
                 if result.endswith('~~') and text[0] not in (' ', '\n', '\r'):
