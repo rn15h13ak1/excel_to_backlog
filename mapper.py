@@ -196,7 +196,7 @@ class IssueMapper:
 
         return re.sub(r"\{\{(.+?)\}\}", replacer, result)
 
-    def _render_auto(self, row: dict[str, str]) -> str:
+    def _render_auto(self, row: dict[str, str], formatted_row: dict[str, str] | None = None) -> str:
         """
         excel_md_tool (MarkdownEditor.tsx) と同じ形式で Markdown を生成する。
 
@@ -206,6 +206,15 @@ class IssueMapper:
           - セル値を本文として見出しの直後に出力
           - セル内の改行（\\n / \\r\\n）は <br> に変換
           - 空セルは「（値なし）」を出力
+
+        Parameters
+        ----------
+        row : dict[str, str]
+            プレーンテキスト行（列の存在確認・空値判定に使用）
+        formatted_row : dict[str, str] | None
+            書式付き Markdown 行（rich_text: true 時に渡す）。
+            指定された場合、本文の値はこちらから取得する。
+            None の場合は row をそのまま使用する。
         """
         # 出力する列を決定（description_cols 指定 > headers の順序 > row のキー順）
         specified = self.cfg.get("description_cols")
@@ -231,9 +240,13 @@ class IssueMapper:
             ]
             heading = "\n".join(heading_lines)
 
-            value = row.get(header, "")
-            if value:
-                body = value.replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
+            # 本文の値: formatted_row が渡されていればそちらを使用（書式付き Markdown）
+            # 空値判定はプレーンテキスト（row）で行う
+            plain_value = row.get(header, "")
+            display_value = (formatted_row or row).get(header, "")
+
+            if plain_value:
+                body = display_value.replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
             else:
                 body = "（値なし）"
 
@@ -492,9 +505,18 @@ class IssueMapper:
     # メイン変換処理
     # ------------------------------------------------------------------
 
-    def map_row(self, row: dict[str, str]) -> dict:
+    def map_row(self, row: dict[str, str], formatted_row: dict[str, str] | None = None) -> dict:
         """
         Excel の1行データを Backlog API の課題パラメータに変換して返す。
+
+        Parameters
+        ----------
+        row : dict[str, str]
+            プレーンテキスト行。フィルタ・件名・担当者・日付解決などに使用。
+        formatted_row : dict[str, str] | None
+            書式付き Markdown 行（rich_text: true 時に渡す）。
+            description_format: auto の本文生成にのみ使用される。
+            None の場合は row をそのまま使用する。
 
         Returns
         -------
@@ -544,7 +566,9 @@ class IssueMapper:
         # description_format: "template"（デフォルト）→ description_template を使用
         desc_format = self.cfg.get("description_format", "template")
         if desc_format == "auto":
-            params["description"] = self._render_auto(row)
+            # formatted_row が渡されている場合は書式付き値を本文に使用する
+            # （rich_text: true かつ description_format: auto のときのみ渡される）
+            params["description"] = self._render_auto(row, formatted_row=formatted_row)
         else:
             template = self.cfg.get("description_template", "")
             if template:
@@ -591,13 +615,18 @@ class IssueMapper:
 
         return params
 
-    def format_dry_run(self, row: dict[str, str], index: int) -> str:
+    def format_dry_run(
+        self,
+        row: dict[str, str],
+        index: int,
+        formatted_row: dict[str, str] | None = None,
+    ) -> str:
         """
         ドライラン用: 変換結果を人間が読みやすい形式で返す。
         変換に失敗した場合はエラーメッセージを返す。
         """
         try:
-            params = self.map_row(row)
+            params = self.map_row(row, formatted_row=formatted_row)
         except ValueError as e:
             return f"  [{index}] ⚠ スキップ: {e}"
 
@@ -619,7 +648,13 @@ class IssueMapper:
                 lines.append(f"         {k}: {v}")
         return "\n".join(lines)
 
-    def format_preview(self, row: dict[str, str], index: int, master_labels: dict = None) -> str:
+    def format_preview(
+        self,
+        row: dict[str, str],
+        index: int,
+        master_labels: dict = None,
+        formatted_row: dict[str, str] | None = None,
+    ) -> str:
         """
         プレビューファイル用: 課題の全内容を Markdown ブロックとして返す。
 
@@ -630,9 +665,10 @@ class IssueMapper:
                           "user":       {id: ユーザー名},
                         }
                         省略時は ID をそのまま表示。
+        formatted_row : 書式付き Markdown 行（rich_text: true 時に渡す）。
         """
         try:
-            params = self.map_row(row)
+            params = self.map_row(row, formatted_row=formatted_row)
         except ValueError as e:
             return f"## 課題 {index}\n\n> ⚠ スキップ: {e}\n"
 

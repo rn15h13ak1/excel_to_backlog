@@ -22,6 +22,11 @@ from typing import Any
 try:
     import openpyxl
     from openpyxl.utils import column_index_from_string
+    try:
+        from openpyxl.cell.rich_text import CellRichText, TextBlock
+        _RICH_TEXT_AVAILABLE = True
+    except ImportError:
+        _RICH_TEXT_AVAILABLE = False
 except ImportError:
     raise ImportError(
         "openpyxl が必要です。`pip install openpyxl` を実行してください。"
@@ -45,7 +50,72 @@ def cell_to_str(value: Any) -> str:
         if isinstance(value, datetime):
             return value.strftime("%Y/%m/%d")
         return value.strftime("%Y/%m/%d")
+    # リッチテキストはプレーンテキストとして結合して返す
+    if _RICH_TEXT_AVAILABLE and isinstance(value, CellRichText):
+        return "".join(
+            str(run.text) if isinstance(run, TextBlock) else str(run)
+            for run in value
+        ).strip()
     return str(value).strip()
+
+
+def cell_to_markdown(cell: Any) -> str:
+    """
+    セルの値と書式を Markdown 文字列に変換する。
+
+    対応書式:
+        取り消し線（strike）→ ~~text~~
+
+    リッチテキスト対応:
+        セル内で部分的に書式が異なる場合（CellRichText）は、
+        各テキストランを個別に変換して結合する。
+        取り消し線付きランと通常ランが隣接する際、Markdown パーサーが
+        ~~ を正しく認識できるよう境界に半角スペースを自動挿入する。
+
+    セル全体に書式がある場合:
+        cell.font.strike == True → ~~セル値全体~~
+
+    書式がない場合は cell_to_str() と同じ出力になる（後方互換）。
+    """
+    value = cell.value
+
+    if value is None:
+        return ""
+
+    # ---- リッチテキスト（セル内部分書式）----
+    if _RICH_TEXT_AVAILABLE and isinstance(value, CellRichText):
+        result = ""
+        for run in value:
+            if isinstance(run, TextBlock):
+                text = str(run.text)
+                is_struck = bool(run.font and run.font.strike)
+            else:
+                text = str(run)
+                is_struck = False
+
+            if not text:
+                continue
+
+            if is_struck:
+                # ~~ の前: 直前の文字がスペース・改行でなければスペースを挿入
+                if result and result[-1] not in (' ', '\n', '\r'):
+                    result += ' '
+                result += f'~~{text}~~'
+            else:
+                # ~~ の直後: 現テキストがスペース・改行始まりでなければスペースを挿入
+                if result.endswith('~~') and text[0] not in (' ', '\n', '\r'):
+                    result += ' '
+                result += text
+
+        return result.strip()
+
+    # ---- セル全体に書式 ----
+    text = cell_to_str(value)
+    if not text:
+        return ""
+    if cell.font and cell.font.strike:
+        return f'~~{text}~~'
+    return text
 
 
 # ------------------------------------------------------------------
@@ -98,12 +168,25 @@ class ExcelReader:
 
     # ------------------------------------------------------------------
 
-    def _load_sheet(self):
-        """ワークブックを開いてシートを返す"""
+    def _load_sheet(self, rich_text: bool = False):
+        """
+        ワークブックを開いてシートを返す。
+
+        Parameters
+        ----------
+        rich_text : bool
+            True のとき rich_text=True でワークブックを開く。
+            openpyxl がリッチテキストセルを CellRichText として返すようになり、
+            cell_to_markdown() による書式付き変換が可能になる。
+            False（デフォルト）は通常の data_only=True で開く。
+        """
         if not self.path.exists():
             raise FileNotFoundError(f"Excel ファイルが見つかりません: {self.path}")
 
-        wb = openpyxl.load_workbook(str(self.path), data_only=True)
+        if rich_text and _RICH_TEXT_AVAILABLE:
+            wb = openpyxl.load_workbook(str(self.path), data_only=True, rich_text=True)
+        else:
+            wb = openpyxl.load_workbook(str(self.path), data_only=True)
 
         if self.sheet_name:
             if self.sheet_name not in wb.sheetnames:
@@ -155,12 +238,25 @@ class ExcelReader:
         return headers
 
     def _build_rows(
-        self, ws, headers: list[str], col_start_idx: int, col_end_idx: int
+        self,
+        ws,
+        headers: list[str],
+        col_start_idx: int,
+        col_end_idx: int,
+        use_markdown: bool = False,
     ) -> list[dict[str, str]]:
         """
         データ行（data_start_row ～ シート最終行）を読み取り、
         {ヘッダー名: セル値} の dict リストを返す。
         空行（全セルが空）はスキップする。
+
+        Parameters
+        ----------
+        use_markdown : bool
+            True のとき cell_to_markdown() で書式付き Markdown 文字列を生成する。
+            False（デフォルト）は cell_to_str() でプレーンテキストを返す。
+            空行判定はプレーンテキストで行うため、use_markdown=True のときも
+            空行は正しくスキップされる。
         """
         rows = []
         max_row = ws.max_row or 0
@@ -170,10 +266,13 @@ class ExcelReader:
             is_empty = True
             for i, col_idx in enumerate(range(col_start_idx, col_end_idx + 1)):
                 cell = ws.cell(row=row_idx, column=col_idx + 1)
-                val = cell_to_str(cell.value)
-                if val:
+                plain = cell_to_str(cell.value)
+                if plain:
                     is_empty = False
-                row_data[headers[i]] = val
+                if use_markdown:
+                    row_data[headers[i]] = cell_to_markdown(cell)
+                else:
+                    row_data[headers[i]] = plain
 
             if not is_empty:
                 rows.append(row_data)
@@ -191,13 +290,52 @@ class ExcelReader:
         headers : list[str]
             ヘッダー名リスト（複数行ヘッダーは " / " 結合）
         rows    : list[dict[str, str]]
-            データ行リスト。各要素は {ヘッダー名: 値} の dict
+            データ行リスト。各要素は {ヘッダー名: 値} の dict（プレーンテキスト）
         """
         ws = self._load_sheet()
         col_start_idx, col_end_idx = self._resolve_col_range(ws)
         headers = self._build_headers(ws, col_start_idx, col_end_idx)
         rows = self._build_rows(ws, headers, col_start_idx, col_end_idx)
         return headers, rows
+
+    def read_with_format(self) -> tuple[list[str], list[dict[str, str]], list[dict[str, str]]]:
+        """
+        Excel ファイルを読み込んで、プレーンテキスト行と書式付き Markdown 行の両方を返す。
+
+        書式付き行はセルの取り消し線を ~~ に変換した Markdown 文字列を持つ。
+        プレーンテキスト行はフィルタリング・件名・担当者解決などに使用し、
+        書式付き行は description_format: auto の本文生成にのみ使用する。
+
+        openpyxl の rich_text オプションが利用できない場合（古いバージョン等）は
+        プレーンテキストを formatted_rows としても返す（警告を出力）。
+
+        Returns
+        -------
+        headers       : list[str]           ヘッダー名リスト
+        plain_rows    : list[dict[str, str]] プレーンテキスト行
+        formatted_rows: list[dict[str, str]] 書式付き Markdown 行
+        """
+        import sys
+
+        if not _RICH_TEXT_AVAILABLE:
+            print(
+                "  ⚠ openpyxl のリッチテキスト機能が利用できません（rich_text オプションは無視されます）。"
+                " openpyxl を最新版にアップグレードしてください。",
+                file=sys.stderr,
+            )
+            headers, plain_rows = self.read()
+            return headers, plain_rows, plain_rows
+
+        # リッチテキストを有効にしてワークブックを開く
+        ws_plain = self._load_sheet(rich_text=False)
+        ws_fmt   = self._load_sheet(rich_text=True)
+        col_start_idx, col_end_idx = self._resolve_col_range(ws_plain)
+        headers = self._build_headers(ws_plain, col_start_idx, col_end_idx)
+
+        plain_rows     = self._build_rows(ws_plain, headers, col_start_idx, col_end_idx, use_markdown=False)
+        formatted_rows = self._build_rows(ws_fmt,   headers, col_start_idx, col_end_idx, use_markdown=True)
+
+        return headers, plain_rows, formatted_rows
 
     @staticmethod
     def filter_rows(

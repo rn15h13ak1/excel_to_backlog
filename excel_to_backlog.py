@@ -284,11 +284,16 @@ def generate_preview_for_source(
     ]
 
     issue_count = 0
+    use_rich_text = bool(mapping_cfg.get("rich_text")) and mapping_cfg.get("description_format") == "auto"
 
     # Excel 読み込み
     try:
         reader = ExcelReader(excel_cfg)
-        headers, rows = reader.read()
+        if use_rich_text:
+            headers, rows, formatted_rows_all = reader.read_with_format()
+        else:
+            headers, rows = reader.read()
+            formatted_rows_all = None
     except Exception as e:
         lines.append(f"> ⚠ Excel 読み込みエラー: {e}")
         lines.append("")
@@ -307,9 +312,19 @@ def generate_preview_for_source(
 
     mapper = IssueMapper(mapping_cfg, master, headers=headers)
 
+    # フィルタ後の行インデックスを plain_rows 全体の中から特定する
+    # （formatted_rows_all は plain rows と同じ順序・同じ件数）
+    plain_row_ids = {id(r): idx for idx, r in enumerate(rows)} if formatted_rows_all else {}
+
     for i, row in enumerate(filtered_rows, 1):
         enriched = inject_meta(row, source_cfg)
-        lines.append(mapper.format_preview(enriched, i, master_labels=master_labels))
+        if formatted_rows_all is not None:
+            orig_idx = plain_row_ids.get(id(row))
+            fmt_row = formatted_rows_all[orig_idx] if orig_idx is not None else None
+            fmt_enriched = inject_meta(fmt_row, source_cfg) if fmt_row is not None else None
+        else:
+            fmt_enriched = None
+        lines.append(mapper.format_preview(enriched, i, master_labels=master_labels, formatted_row=fmt_enriched))
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -411,10 +426,16 @@ def process_source(
     print(f"  シート : {excel_cfg.get('sheet', '（最初のシート）')}")
     print(f"  upsert : {'有効' if upsert_enabled else '無効（常に新規作成）'}")
 
+    use_rich_text = bool(mapping_cfg.get("rich_text")) and mapping_cfg.get("description_format") == "auto"
+
     # ---- Excel 読み込み ----
     try:
         reader = ExcelReader(excel_cfg)
-        headers, rows = reader.read()
+        if use_rich_text:
+            headers, rows, formatted_rows_all = reader.read_with_format()
+        else:
+            headers, rows = reader.read()
+            formatted_rows_all = None
     except Exception as e:
         print(f"\n  エラー: Excel の読み込みに失敗しました: {e}", file=sys.stderr)
         counts["error"] += 1
@@ -433,18 +454,33 @@ def process_source(
     # ---- マッパー初期化 ----
     mapper = IssueMapper(mapping_cfg, master, headers=headers)
 
+    # フィルタ後の行を plain_rows 全体のインデックスに対応付ける
+    plain_row_ids = {id(r): idx for idx, r in enumerate(rows)} if formatted_rows_all else {}
+
+    def get_formatted_row(plain_row: dict) -> dict | None:
+        """plain_row に対応する書式付き行を返す。rich_text 無効時は None。"""
+        if formatted_rows_all is None:
+            return None
+        orig_idx = plain_row_ids.get(id(plain_row))
+        return formatted_rows_all[orig_idx] if orig_idx is not None else None
+
     # ---- ドライラン ----
     if dry_run:
         print(f"\n  [DRY RUN] 以下の課題を作成/更新します:\n")
         for i, row in enumerate(filtered_rows, 1):
-            print(mapper.format_dry_run(inject_meta(row, source_cfg), i))
+            fmt_row = get_formatted_row(row)
+            enriched = inject_meta(row, source_cfg)
+            fmt_enriched = inject_meta(fmt_row, source_cfg) if fmt_row is not None else None
+            print(mapper.format_dry_run(enriched, i, formatted_row=fmt_enriched))
         return counts
 
     # ---- 実処理 ----
     for i, row in enumerate(filtered_rows, 1):
+        fmt_row = get_formatted_row(row)
         enriched = inject_meta(row, source_cfg)
+        fmt_enriched = inject_meta(fmt_row, source_cfg) if fmt_row is not None else None
         try:
-            params = mapper.map_row(enriched)
+            params = mapper.map_row(enriched, formatted_row=fmt_enriched)
         except ValueError as e:
             print(f"  [{i}] ⚠ スキップ: {e}", file=sys.stderr)
             counts["skipped"] += 1
