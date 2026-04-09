@@ -88,25 +88,36 @@ def cell_to_markdown(cell: Any) -> str:
         return ""
 
     # ---- ① リッチテキスト（セル内部分書式・最優先）----
-    # CellRichText の場合はランレベルの書式のみを使用する。
-    # cell.font.strike は Excel がセルの一部に取り消し線を設定した際に
-    # セルレベルのスタイルにも自動設定されることがあり、実際のランレベルの
-    # 取り消し線範囲と一致しないケースがあるため無視する。
+    # openpyxl は <rPr> 要素を持つランを TextBlock、持たないランをプレーン文字列として返す。
     #
-    # openpyxl は <rPr> 要素を持つランを TextBlock（run.font.strike=True/False）、
-    # <rPr> 要素を持たないランをプレーン文字列として返す。
-    # Excel でテキストを選択して取り消し線を適用した場合、そのランには必ず
-    # <rPr><strike/></rPr> が明示保存されるため、TextBlock として正しく検出できる。
+    # プレーン文字列ランの取り消し線判定:
+    #   Excel は「セル全体に取り消し線 → 一部を解除」という操作をした場合、
+    #   解除したランのみ <rPr><strike val="false"/></rPr> を明示し（TextBlock）、
+    #   取り消し線が残るランは <rPr> を省略してセルレベルのスタイルを継承させる。
+    #   この場合、TextBlock に strike=True のランは存在せず cell.font.strike=True になる。
+    #   → TextBlock に strike=True がなく cell.font.strike=True のときのみ継承する。
+    #
+    #   逆に「セルの一部だけに取り消し線を適用」した場合は、そのランが TextBlock
+    #   (strike=True) として保存され、cell.font.strike も True になることがある。
+    #   この場合はランレベルの情報が正確なため、プレーン文字列ランへの継承はしない。
     if _RICH_TEXT_AVAILABLE and isinstance(value, CellRichText):
         result = ""
+        # TextBlock に明示的 strike=True のランが存在するか確認
+        any_run_struck = any(
+            isinstance(run, TextBlock) and bool(run.font and run.font.strike)
+            for run in value
+        )
+        cell_strike = bool(cell.font and cell.font.strike)
+
         for run in value:
             if isinstance(run, TextBlock):
                 text = str(run.text)
                 is_struck = bool(run.font and run.font.strike)
             else:
-                # プレーン文字列ラン（<rPr> なし）→ 取り消し線なし
+                # プレーン文字列ラン（<rPr> なし）
+                # TextBlock に strike=True がなく、セルレベルで strike=True の場合のみ継承
                 text = str(run)
-                is_struck = False
+                is_struck = cell_strike and not any_run_struck
 
             if not text:
                 continue
