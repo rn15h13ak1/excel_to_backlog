@@ -366,6 +366,36 @@ def generate_preview_file(
 
 
 # ------------------------------------------------------------------
+# 課題新規作成（2段階: 未対応で作成 → statusId を更新）
+# ------------------------------------------------------------------
+
+def create_issue_with_status(client: BacklogClient, params: dict) -> dict:
+    """
+    課題を新規作成する。
+
+    Backlog API は新規作成時に「完了」などの終了ステータスを直接設定できないため、
+    statusId をいったん除いた状態（デフォルト「未対応」）で作成し、
+    statusId が指定されていた場合は作成後に update_issue で変更する。
+    """
+    status_id = params.pop("statusId", None)
+    try:
+        issue = client.create_issue(params)
+    finally:
+        # pop したのでロールバックしておく（呼び出し元の params を汚さない）
+        if status_id is not None:
+            params["statusId"] = status_id
+
+    if status_id is not None:
+        try:
+            client.update_issue(issue["issueKey"], {"statusId": status_id})
+        except BacklogNoChangeError:
+            # 作成時点で既にそのステータスだった場合はそのまま続行
+            pass
+
+    return issue
+
+
+# ------------------------------------------------------------------
 # 新規作成の確認
 # ------------------------------------------------------------------
 
@@ -507,7 +537,7 @@ def process_source(
                         print(f"  [{i}] — スキップ（新規作成をキャンセル）: {params.get('summary', '')}")
                         counts["skipped"] += 1
                         continue
-                    issue = client.create_issue(params)
+                    issue = create_issue_with_status(client, params)
                     print(f"  [{i}] ✅ 作成: {issue['issueKey']} — {issue['summary']}")
                     counts["created"] += 1
             else:
@@ -515,7 +545,7 @@ def process_source(
                     print(f"  [{i}] — スキップ（新規作成をキャンセル）: {params.get('summary', '')}")
                     counts["skipped"] += 1
                     continue
-                issue = client.create_issue(params)
+                issue = create_issue_with_status(client, params)
                 print(f"  [{i}] ✅ 作成: {issue['issueKey']} — {issue['summary']}")
                 counts["created"] += 1
 
