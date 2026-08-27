@@ -295,7 +295,11 @@ def generate_preview_for_source(
             headers, rows = reader.read()
             formatted_rows_all = None
     except Exception as e:
+        import traceback
         lines.append(f"> ⚠ Excel 読み込みエラー: {e}")
+        lines.append("")
+        lines.append("> ヒント: Excelファイルが破損または非標準形式の可能性があります。")
+        lines.append(f"> 詳細: `{traceback.format_exc()}`")
         lines.append("")
         output_path.write_text("\n".join(lines), encoding="utf-8")
         return 0
@@ -467,7 +471,11 @@ def process_source(
             headers, rows = reader.read()
             formatted_rows_all = None
     except Exception as e:
+        import traceback
         print(f"\n  エラー: Excel の読み込みに失敗しました: {e}", file=sys.stderr)
+        print("  ヒント: Excelファイルが破損または非標準形式の可能性があります。", file=sys.stderr)
+        print("         詳細:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         counts["error"] += 1
         return counts
 
