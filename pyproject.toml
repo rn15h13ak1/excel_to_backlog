@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "excel-to-backlog"
 version = "0.1.0"
@@ -15,7 +19,23 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+# モジュールがリポジトリ直下に並ぶ構成（flat-layout）のため、
+# setuptools の自動検出では「トップレベルモジュールが複数ある」と判断されて
+# ビルドが失敗する。対象を明示する。
+[tool.setuptools]
+py-modules = [
+    "excel_to_backlog",
+    "excel_reader",
+    "mapper",
+    "backlog_client",
+    "run_log",
+    "summary_index",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # モジュールがリポジトリ直下にあるため、テストから import できるようにする
 pythonpath = ["."]
+
+[tool.coverage.run]
+omit = ["tests/*"]
