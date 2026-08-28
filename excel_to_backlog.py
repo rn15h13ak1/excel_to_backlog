@@ -35,6 +35,7 @@ import argparse
 import re
 import sys
 import time
+from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 
@@ -43,6 +44,7 @@ import yaml
 from backlog_client import BacklogAPIError, BacklogClient, BacklogNoChangeError
 from excel_reader import ExcelReader
 from mapper import BacklogMaster, IssueMapper
+from run_log import RunLog, default_log_path, load_completed
 
 
 # ------------------------------------------------------------------
@@ -84,6 +86,7 @@ def new_counts() -> dict:
                     （以前は skipped に混ぜていたが、「処理しなかった」行と
                      「処理したが変わらなかった」行は意味が異なるため分離した）
     skipped       : 必須列が空・確認でキャンセル等で処理しなかった件数
+    resumed       : --resume により前回処理済みとして飛ばした件数
     status_failed : 作成には成功したがステータス変更に失敗した件数
                     （created にも計上される。課題は Backlog に存在する）
     error         : 作成・更新に失敗した件数
@@ -93,6 +96,7 @@ def new_counts() -> dict:
         "updated": 0,
         "unchanged": 0,
         "skipped": 0,
+        "resumed": 0,
         "status_failed": 0,
         "error": 0,
     }
@@ -618,6 +622,8 @@ def process_source(
     client: BacklogClient,
     master: BacklogMaster,
     dry_run: bool,
+    run_log: RunLog | None = None,
+    completed: set[tuple[str, str]] | None = None,
 ) -> dict:
     """
     1つのソース（Excel ファイル）を処理して作成・更新件数を返す。
@@ -706,6 +712,14 @@ def process_source(
         return counts
 
     # ---- 実処理 ----
+    def log(*, row: int, action: str, issue_key: str = "", summary: str = "", detail: str = "") -> None:
+        """実行ログに1件記録する（--log-file 未指定時は何もしない）。"""
+        if run_log is not None:
+            run_log.record(
+                source=name, row=row, action=action,
+                issue_key=issue_key, summary=summary, detail=detail,
+            )
+
     for i, row in enumerate(filtered_rows, 1):
         fmt_row = get_formatted_row(row)
         enriched = inject_meta(row, source_cfg)
@@ -715,6 +729,13 @@ def process_source(
         except ValueError as e:
             print(f"  [{i}] ⚠ スキップ: {e}", file=sys.stderr)
             counts["skipped"] += 1
+            log(row=i, action="skipped", detail=str(e))
+            continue
+
+        # --resume: 前回の実行で作成・更新まで完了した行は飛ばす
+        if completed is not None and (name, params.get("summary", "")) in completed:
+            print(f"  [{i}] — 再開スキップ（前回処理済み）: {params.get('summary', '')}")
+            counts["resumed"] += 1
             continue
 
         # API を1度でも呼んだ行だけレート制限用の待機を入れる
@@ -734,21 +755,29 @@ def process_source(
                     client.update_issue(existing_key, update_params)
                     print(f"  [{i}] ✅ 更新: {existing_key} — {params.get('summary', '')}")
                     counts["updated"] += 1
+                    log(row=i, action="updated", issue_key=existing_key,
+                        summary=params.get("summary", ""))
                 except BacklogNoChangeError as nce:
                     # 実際の Backlog エラーメッセージを表示して誤検出を確認できるようにする
                     print(f"  [{i}] — 変更なし: {existing_key} — {params.get('summary', '')}")
                     print(f"    Backlog message: {nce}", file=sys.stderr)
                     counts["unchanged"] += 1
+                    log(row=i, action="unchanged", issue_key=existing_key,
+                        summary=params.get("summary", ""), detail=str(nce))
             else:
                 if not confirm_create(params, i):
                     print(f"  [{i}] — スキップ（新規作成をキャンセル）: {params.get('summary', '')}")
                     counts["skipped"] += 1
+                    log(row=i, action="skipped", summary=params.get("summary", ""),
+                        detail="新規作成をキャンセル")
                     continue
                 try:
                     api_called = True
                     issue = create_issue_with_status(client, params)
                     print(f"  [{i}] ✅ 作成: {issue['issueKey']} — {issue['summary']}")
                     counts["created"] += 1
+                    log(row=i, action="created", issue_key=issue["issueKey"],
+                        summary=issue["summary"])
                 except StatusUpdateFailed as e:
                     # 課題は作成済み。issueKey を必ず表示する（Backlog 上に
                     # 取り残されたことに気づけないと重複作成につながる）
@@ -760,11 +789,15 @@ def process_source(
                     print(f"    {e.cause}", file=sys.stderr)
                     counts["created"] += 1
                     counts["status_failed"] += 1
+                    log(row=i, action="created_status_failed",
+                        issue_key=issue["issueKey"], summary=issue["summary"],
+                        detail=str(e.cause))
 
         except BacklogAPIError as e:
             print(f"  [{i}] ❌ 失敗: {params.get('summary', '')}", file=sys.stderr)
             print(f"    {e}", file=sys.stderr)
             counts["error"] += 1
+            log(row=i, action="error", summary=params.get("summary", ""), detail=str(e))
             # 認証・権限エラーは以降の行でも必ず失敗するため実行全体を中止する
             if e.fatal:
                 raise
@@ -815,6 +848,16 @@ def main():
         "--execute",
         action="store_true",
         help="実際に Backlog へ課題を作成/更新する（省略時はドライラン）",
+    )
+    parser.add_argument(
+        "--resume",
+        metavar="CSV",
+        help="過去の実行ログ（run_*.csv）を読み、作成・更新済みの行を飛ばして再開する",
+    )
+    parser.add_argument(
+        "--no-log",
+        action="store_true",
+        help="実行ログ（run_*.csv）を出力しない",
     )
     parser.add_argument(
         "--debug",
@@ -909,23 +952,41 @@ def main():
     # 何件作成済みかを知る手段がターミナルのログしか無かった。
     total = new_counts()
     interrupted = ""
-    try:
-        for source_cfg in sources_cfg:
-            counts = process_source(source_cfg, client, master, dry_run=dry_run)
-            for k in total:
-                total[k] += counts[k]
-    except KeyboardInterrupt:
-        interrupted = "ユーザーによる中断（Ctrl-C）"
-    except BacklogAPIError as e:
-        interrupted = f"API エラーのため中止しました\n  {e}"
-    finally:
-        print_summary(total, dry_run=dry_run, interrupted=interrupted)
+
+    # 実行ログ。ドライランでは書き込みが発生しないため出力しない。
+    log_path = None
+    if not dry_run and not args.no_log:
+        log_path = default_log_path(
+            Path(args.config).parent, datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
+
+    completed = load_completed(args.resume) if args.resume else None
+
+    with ExitStack() as stack:
+        run_log = stack.enter_context(RunLog(log_path)) if log_path else None
+        try:
+            for source_cfg in sources_cfg:
+                counts = process_source(
+                    source_cfg, client, master, dry_run=dry_run,
+                    run_log=run_log, completed=completed,
+                )
+                for k in total:
+                    total[k] += counts[k]
+        except KeyboardInterrupt:
+            interrupted = "ユーザーによる中断（Ctrl-C）"
+        except BacklogAPIError as e:
+            interrupted = f"API エラーのため中止しました\n  {e}"
+        finally:
+            print_summary(
+                total, dry_run=dry_run, interrupted=interrupted, log_path=log_path
+            )
 
     if interrupted:
         sys.exit(1)
 
 
-def print_summary(total: dict, *, dry_run: bool, interrupted: str = "") -> None:
+def print_summary(total: dict, *, dry_run: bool, interrupted: str = "",
+                  log_path=None) -> None:
     """処理結果のサマリーを表示する。"""
     print(f"\n{'='*55}")
     print("処理完了" if not interrupted else "処理中断")
@@ -948,6 +1009,8 @@ def print_summary(total: dict, *, dry_run: bool, interrupted: str = "") -> None:
     print(f"  更新: {total['updated']} 件")
     print(f"  変更なし: {total['unchanged']} 件")
     print(f"  スキップ: {total['skipped']} 件")
+    if total["resumed"]:
+        print(f"  再開スキップ: {total['resumed']} 件（前回処理済み）")
     print(f"  エラー: {total['error']} 件")
     if total["status_failed"]:
         print()
@@ -956,6 +1019,12 @@ def print_summary(total: dict, *, dry_run: bool, interrupted: str = "") -> None:
             f"ステータス変更に失敗しています。"
         )
         print("    課題は Backlog に存在します。上のログの issueKey を確認してください。")
+
+    if log_path is not None:
+        print()
+        print(f"  実行ログ: {log_path}")
+        if interrupted or total["error"]:
+            print(f"  続きから再開するには: --resume {log_path.name}")
 
 
 if __name__ == "__main__":

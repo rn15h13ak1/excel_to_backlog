@@ -22,6 +22,7 @@ venv/
 # 出力・ログ
 *.log
 preview_*.md
+run_*.csv
 
 # pytest
 .pytest_cache/

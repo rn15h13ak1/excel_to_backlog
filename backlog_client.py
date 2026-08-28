@@ -172,39 +172,117 @@ class BacklogClient:
             fatal=e.code in (401, 403),
         )
 
+    # リトライ設定
+    MAX_RETRIES = 3          # 初回を除く再送回数
+    RETRY_BASE_WAIT = 2.0    # 指数バックオフの基準秒数（2 → 4 → 8 秒）
+    MAX_RETRY_WAIT = 60.0    # Retry-After が極端に大きい場合の上限
+
+    def _retry_wait(self, attempt: int, retry_after: str | None) -> float:
+        """
+        次の再送までの待機秒数を求める。
+
+        Retry-After ヘッダーがあればそれを優先し、なければ指数バックオフ。
+        """
+        if retry_after:
+            try:
+                return min(float(retry_after), self.MAX_RETRY_WAIT)
+            except ValueError:
+                pass  # HTTP-date 形式は解釈せずバックオフにフォールバック
+        return min(self.RETRY_BASE_WAIT * (2 ** attempt), self.MAX_RETRY_WAIT)
+
     def _send(
         self,
         req: urllib.request.Request,
         endpoint: str,
         *,
         raise_no_change: bool = False,
+        idempotent: bool = True,
     ) -> dict | list:
         """
-        リクエストを送信して JSON を返す。
+        リクエストを送信して JSON を返す。失敗時は条件付きで再送する。
 
         HTTPError は _handle_http_error() で BacklogAPIError に変換する。
-        URLError（DNS 失敗・接続リセット・TLS エラー・タイムアウト）も
+        URLError（DNS 失敗・接続リセット・TLS エラー）とタイムアウトも
         BacklogAPIError に変換する。以前はこれが捕捉されておらず、
         通信が一度切れるだけでトレースバックとともに実行全体が停止し、
         それまでに作成した課題のサマリーも表示されなかった。
+
+        Parameters
+        ----------
+        idempotent : bool
+            同じリクエストを再送しても副作用が重複しないか。
+            GET と PATCH は True。POST（課題作成）は False を渡すこと。
+
+        再送する条件:
+            HTTP 429            : リクエストは処理されていないため常に再送する
+            HTTP 5xx / 通信断   : idempotent=True のときのみ再送する
+                                  （POST は課題が作成済みかもしれず、再送すると
+                                    重複作成になるためエラーとして返す）
         """
-        try:
-            with urllib.request.urlopen(req, timeout=30, context=self.ssl_context) as res:
-                return json.loads(res.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            self._handle_http_error(e, endpoint, raise_no_change=raise_no_change)
-        except urllib.error.URLError as e:
-            raise BacklogAPIError(
-                f"通信に失敗しました: {endpoint}\n  理由: {e.reason}",
-                endpoint=endpoint,
-                detail=str(e.reason),
-            ) from e
-        except TimeoutError as e:
-            raise BacklogAPIError(
-                f"通信がタイムアウトしました（30秒）: {endpoint}",
-                endpoint=endpoint,
-                detail="timeout",
-            ) from e
+        last_error: BacklogAPIError | None = None
+
+        for attempt in range(self.MAX_RETRIES + 1):
+            retry_after = None
+            try:
+                with urllib.request.urlopen(
+                    req, timeout=30, context=self.ssl_context
+                ) as res:
+                    return json.loads(res.read().decode("utf-8"))
+
+            except urllib.error.HTTPError as e:
+                retryable = e.code == 429 or (idempotent and 500 <= e.code < 600)
+                if not retryable:
+                    # BacklogAPIError / BacklogNoChangeError を送出する
+                    self._handle_http_error(e, endpoint, raise_no_change=raise_no_change)
+                retry_after = e.headers.get("Retry-After") if e.headers else None
+                last_error = BacklogAPIError(
+                    f"API 呼び出しに失敗しました（HTTP {e.code}）: {endpoint}",
+                    status=e.code,
+                    endpoint=endpoint,
+                )
+
+            except urllib.error.URLError as e:
+                if not idempotent:
+                    raise BacklogAPIError(
+                        f"通信に失敗しました: {endpoint}\n  理由: {e.reason}\n"
+                        f"  → 課題が作成済みの可能性があるため再送しません。"
+                        f"Backlog 側を確認してください。",
+                        endpoint=endpoint,
+                        detail=str(e.reason),
+                    ) from e
+                last_error = BacklogAPIError(
+                    f"通信に失敗しました: {endpoint}\n  理由: {e.reason}",
+                    endpoint=endpoint,
+                    detail=str(e.reason),
+                )
+
+            except TimeoutError as e:
+                if not idempotent:
+                    raise BacklogAPIError(
+                        f"通信がタイムアウトしました（30秒）: {endpoint}\n"
+                        f"  → 課題が作成済みの可能性があるため再送しません。"
+                        f"Backlog 側を確認してください。",
+                        endpoint=endpoint,
+                        detail="timeout",
+                    ) from e
+                last_error = BacklogAPIError(
+                    f"通信がタイムアウトしました（30秒）: {endpoint}",
+                    endpoint=endpoint,
+                    detail="timeout",
+                )
+
+            if attempt == self.MAX_RETRIES:
+                break
+
+            wait = self._retry_wait(attempt, retry_after)
+            print(
+                f"  ⏳ {last_error.status or '通信エラー'} のため {wait:.0f} 秒待って再試行します"
+                f"（{attempt + 1}/{self.MAX_RETRIES}）: {endpoint}",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
+
+        raise last_error
 
     def _get(self, endpoint: str, params: dict = None) -> dict | list:
         """GET リクエストを送信して JSON を返す"""
@@ -251,7 +329,9 @@ class BacklogClient:
             method="POST",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-        result = self._send(req, endpoint)
+        # POST は冪等でない。通信断や 5xx で再送すると課題が二重に作られるため、
+        # 確実に未処理と分かる 429 のみ再送させる。
+        result = self._send(req, endpoint, idempotent=False)
         if self.debug:
             self._debug_custom_fields("POST", result)
         return result
