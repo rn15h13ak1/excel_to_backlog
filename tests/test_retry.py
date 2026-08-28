@@ -16,11 +16,9 @@ from backlog_client import BacklogAPIError, BacklogClient
 
 
 @pytest.fixture
-def client(monkeypatch):
-    """待機を無効化した BacklogClient。"""
-    c = BacklogClient("example.backlog.com", "dummy-key")
-    monkeypatch.setattr("backlog_client.time.sleep", lambda _: None)
-    return c
+def client():
+    """BacklogClient（リトライ待機は conftest の no_sleep で無効化済み）。"""
+    return BacklogClient("example.backlog.com", "dummy-key")
 
 
 def http_error(status, headers=None):

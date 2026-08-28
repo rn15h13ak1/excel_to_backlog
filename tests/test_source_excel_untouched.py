@@ -22,11 +22,6 @@ from mapper import BacklogMaster
 from run_log import RunLog
 
 
-@pytest.fixture(autouse=True)
-def _no_sleep(monkeypatch):
-    monkeypatch.setattr(etb.time, "sleep", lambda _: None)
-
-
 @pytest.fixture
 def excel(tmp_path):
     """数式とデータを含むブック（数式の消失を検知するため）。"""

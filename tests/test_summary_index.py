@@ -98,10 +98,6 @@ class TestSummaryIndex:
 class TestNoNPlusOne:
     """行数が増えても検索リクエストが増えないこと。"""
 
-    @pytest.fixture(autouse=True)
-    def _no_sleep(self, monkeypatch):
-        monkeypatch.setattr(etb.time, "sleep", lambda _: None)
-
     @pytest.fixture
     def excel(self, tmp_path):
         wb = Workbook()
