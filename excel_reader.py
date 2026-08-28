@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import re
 import sys
+import zipfile
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 try:
     import openpyxl
@@ -210,6 +212,43 @@ class ExcelReader:
 
     # ------------------------------------------------------------------
 
+    # xl/workbook.xml のルート名前空間。Strict Open XML は別の名前空間を使う。
+    TRANSITIONAL_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    STRICT_NS = "http://purl.oclc.org/ooxml/spreadsheetml/main"
+
+    @classmethod
+    def detect_ooxml_variant(cls, path: Path) -> str:
+        """
+        xlsx が Transitional か Strict かを判定する。
+
+        openpyxl は Strict Open XML を公式にサポートしておらず、
+        名前空間が一致しないため共有文字列テーブルが空のまま読み込まれ、
+        セル値の解決時に "list index out of range" という原因と無関係な
+        エラーになる。事前に判定して対処を示すために使う。
+
+        Returns
+        -------
+        "transitional" / "strict" / "unknown"
+        """
+        try:
+            with zipfile.ZipFile(path) as z:
+                name = next(
+                    (n for n in z.namelist()
+                     if n.endswith("workbook.xml") and "_rels" not in n),
+                    None,
+                )
+                if not name:
+                    return "unknown"
+                root = ElementTree.fromstring(z.read(name))
+        except (zipfile.BadZipFile, ElementTree.ParseError, OSError):
+            return "unknown"
+
+        namespace = root.tag.split("}")[0].lstrip("{")
+        return {
+            cls.TRANSITIONAL_NS: "transitional",
+            cls.STRICT_NS: "strict",
+        }.get(namespace, "unknown")
+
     def _load_sheet(self, rich_text: bool = False):
         """
         ワークブックを開いてシートを返す。
@@ -224,6 +263,17 @@ class ExcelReader:
         """
         if not self.path.exists():
             raise FileNotFoundError(f"Excel ファイルが見つかりません: {self.path}")
+
+        # Strict Open XML は openpyxl が対応していない。そのまま読み込むと
+        # 共有文字列テーブルが空になり "list index out of range" という
+        # 原因と無関係なエラーになるため、対処を示して先に止める。
+        if self.detect_ooxml_variant(self.path) == "strict":
+            raise ValueError(
+                f"このファイルは Strict Open XML 形式のため読み込めません: {self.path}\n"
+                "  openpyxl は Strict Open XML に対応していません。\n"
+                "  → Excel で開き「名前を付けて保存」でファイルの種類を\n"
+                "    「Excel ブック (*.xlsx)」（Strict でない通常の xlsx）にして保存し直してください。"
+            )
 
         if rich_text and _RICH_TEXT_AVAILABLE:
             wb = openpyxl.load_workbook(str(self.path), data_only=True, rich_text=True)

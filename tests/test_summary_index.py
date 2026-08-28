@@ -101,7 +101,6 @@ class TestNoNPlusOne:
     @pytest.fixture(autouse=True)
     def _no_sleep(self, monkeypatch):
         monkeypatch.setattr(etb.time, "sleep", lambda _: None)
-        monkeypatch.setattr(etb, "confirm_create", lambda params, index: True)
 
     @pytest.fixture
     def excel(self, tmp_path):

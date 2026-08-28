@@ -584,29 +584,54 @@ def create_issue_with_status(client: BacklogClient, params: dict) -> dict:
 # 新規作成の確認
 # ------------------------------------------------------------------
 
-def confirm_create(params: dict, index: int) -> bool:
-    """
-    新規作成前にユーザーへ確認を求める。
-    y / yes を入力した場合のみ True を返す。デフォルトは No（スキップ）。
+class ConfirmationDeclined(Exception):
+    """ユーザーが実行前の確認で「いいえ」を選んだ。"""
 
-    表示する情報:
-        件名・種別ID・優先度ID・期限日（設定されている場合）
-    """
-    summary   = params.get("summary", "（件名なし）")
-    due_date  = params.get("dueDate", "")
 
-    print(f"\n  [{index}] 新規作成の確認:")
-    print(f"    件名  : {summary}")
-    if due_date:
-        print(f"    期限日: {due_date}")
+def confirm_run(sources_cfg: list, master: BacklogMaster, assume_yes: bool) -> None:
+    """
+    Backlog への書き込みを始める前に、一度だけ確認を求める。
+
+    以前は行ごとに新規作成の確認を出していたが、以下の問題があった:
+      - 200 行あれば 200 回の入力が必要で、実質「全部 y」しか選べない
+      - 表示が件名と期限日だけで、本文・担当者・ステータス・カスタム属性は
+        隠れており、行ごとに判断する材料が無かった
+      - 既存課題の「更新」は無確認だった。上書きという破壊的な操作の方が
+        確認なしで、追加でしかない作成の方に確認を求めていた
+      - 非対話環境では input() が毎回 EOFError になり全行スキップ。
+        1 件も作らずに「作成: 0 件」と表示して正常終了していた
+
+    Raises
+    ------
+    ConfirmationDeclined
+        ユーザーが「いいえ」を選んだ場合、または非対話環境で --yes が
+        指定されていない場合。
+    """
+    names = [s.get("name", "（名前なし）") for s in sources_cfg]
+
+    print()
+    print("─" * 55)
+    print("Backlog への書き込みを開始します")
+    print("─" * 55)
+    print(f"  対象ソース: {', '.join(names)}")
+    print("  内容は --preview / ドライランで事前に確認できます。")
+    print()
+
+    if assume_yes:
+        print("  --yes が指定されているため確認をスキップします。")
+        return
 
     try:
-        answer = input("    Backlog に新規作成しますか？ [y/N]: ").strip().lower()
+        answer = input("  実行しますか？ [y/N]: ").strip().lower()
     except EOFError:
-        # 非対話環境（パイプ等）ではデフォルト No
-        answer = ""
+        # 非対話環境で黙ってスキップすると「成功したように見える無処理」に
+        # なるため、明示的にエラーとして止める。
+        raise ConfirmationDeclined(
+            "非対話環境では確認を求められません。実行するには --yes を付けてください。"
+        ) from None
 
-    return answer in ("y", "yes")
+    if answer not in ("y", "yes"):
+        raise ConfirmationDeclined("ユーザーが実行を取り消しました。")
 
 
 # ------------------------------------------------------------------
@@ -763,12 +788,6 @@ def process_source(
                     log(row=i, action="unchanged", issue_key=existing_key,
                         summary=params.get("summary", ""), detail=str(nce))
             else:
-                if not confirm_create(params, i):
-                    print(f"  [{i}] — スキップ（新規作成をキャンセル）: {params.get('summary', '')}")
-                    counts["skipped"] += 1
-                    log(row=i, action="skipped", summary=params.get("summary", ""),
-                        detail="新規作成をキャンセル")
-                    continue
                 try:
                     api_called = True
                     issue = create_issue_with_status(client, params)
@@ -850,6 +869,11 @@ def main():
         "--execute",
         action="store_true",
         help="実際に Backlog へ課題を作成/更新する（省略時はドライラン）",
+    )
+    parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="実行前の確認を省略する（非対話環境ではこの指定が必要）",
     )
     parser.add_argument(
         "--resume",
@@ -966,6 +990,12 @@ def main():
 
     # 件名索引は遅延構築のため、match_summary を使うソースが無ければ API を呼ばない
     summary_index = SummaryIndex(client, master.project_id)
+
+    try:
+        confirm_run(sources_cfg, master, assume_yes=args.yes)
+    except ConfirmationDeclined as e:
+        print(f"\n  {e}", file=sys.stderr)
+        sys.exit(1)
 
     with ExitStack() as stack:
         run_log = stack.enter_context(RunLog(log_path)) if log_path else None

@@ -42,9 +42,8 @@ def master():
 
 
 @pytest.fixture(autouse=True)
-def _auto_confirm(monkeypatch):
-    """確認プロンプトを常に yes にし、待機を無効化する。"""
-    monkeypatch.setattr(etb, "confirm_create", lambda params, index: True)
+def _no_sleep(monkeypatch):
+    """レート制限用の待機を無効化する。"""
     monkeypatch.setattr(etb.time, "sleep", lambda _: None)
 
 
