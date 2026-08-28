@@ -83,6 +83,19 @@ python excel_to_backlog.py [オプション]
 
 > `--preview` と `--execute` は同時に指定できません。
 
+### 元の Excel ファイルは変更しません
+
+このツールは読み込んだ Excel を一切書き換えません。生成するのは以下の新規ファイルのみで、いずれも設定ファイル（`config.yaml`）と同じディレクトリに出力されます。
+
+| ファイル | 内容 |
+|---|---|
+| `run_YYYYMMDD_HHMMSS.csv` | 実行ログ |
+| `preview_YYYYMMDD_HHMMSS_<ソース名>.md` | `--preview` の出力 |
+
+そのため、作成した issueKey が Excel の `key_col` に自動で書き戻されることはありません。対応表が必要な場合は実行ログを参照してください。
+
+> この方針は `tests/test_source_excel_untouched.py` でテストとして固定されています。openpyxl でファイルを開き直して保存すると、数式が失われるほか Excel 側で作成したグラフ・ピボットテーブル・画像などが失われる可能性があるためです。
+
 ### 実行ログと再開
 
 `--execute` で実行すると、処理した行を `run_YYYYMMDD_HHMMSS.csv` に1件ずつ記録します。1行ごとに書き込むため、途中で強制終了しても直前までの内容が残ります。
