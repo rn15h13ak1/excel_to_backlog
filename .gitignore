@@ -21,3 +21,7 @@ venv/
 
 # 出力・ログ
 *.log
+preview_*.md
+
+# pytest
+.pytest_cache/

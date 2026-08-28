@@ -60,6 +60,16 @@ def cell_to_str(value: Any) -> str:
     return str(value).strip()
 
 
+def strike_markdown(text: str) -> str:
+    """
+    テキストを Markdown の取り消し線 ~~...~~ で囲む。
+
+    Markdown の ~~ は改行をまたげないため、複数行のセル値は行ごとに囲む。
+    空行はそのまま空行として残す（~~~~ を出力しない）。
+    """
+    return "\n".join(f"~~{line}~~" if line else "" for line in text.split("\n"))
+
+
 def cell_to_markdown(cell: Any) -> str:
     """
     セルの値と書式を Markdown 文字列に変換する。
@@ -124,9 +134,7 @@ def cell_to_markdown(cell: Any) -> str:
                 continue
 
             if is_struck:
-                # Markdown の ~~ は改行をまたげないため、行ごとに個別に適用する
-                parts = text.split('\n')
-                formatted = '\n'.join(f'~~{p}~~' if p else '' for p in parts)
+                formatted = strike_markdown(text)
                 # ~~ の前: 直前の文字がスペース・改行でなければスペースを挿入
                 if result and result[-1] not in (' ', '\n', '\r'):
                     result += ' '
@@ -144,7 +152,9 @@ def cell_to_markdown(cell: Any) -> str:
     # cell.font.strike が True の場合、値全体を ~~ で囲む。
     if cell.font and cell.font.strike:
         text = cell_to_str(value)
-        return f'~~{text}~~' if text else ''
+        # リッチテキスト側と同じく行ごとに囲む。以前はセル全体を1つの ~~ で
+        # 囲んでいたため、複数行セルでは改行をまたいで Markdown が壊れていた。
+        return strike_markdown(text) if text else ''
 
     # ---- ③ 書式なし ----
     return cell_to_str(value)

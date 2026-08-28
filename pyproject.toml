@@ -1,0 +1,21 @@
+[project]
+name = "excel-to-backlog"
+version = "0.1.0"
+description = "Excel ファイルから Backlog の課題を一括登録・更新する CLI ツール"
+requires-python = ">=3.10"
+
+dependencies = [
+    # 3.1 以降で openpyxl.cell.rich_text が利用できる。
+    # これより古いと rich_text: true を設定しても取り消し線が反映されず、
+    # stderr の警告 1 行だけで静かに機能が失われる。
+    "openpyxl>=3.1",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# モジュールがリポジトリ直下にあるため、テストから import できるようにする
+pythonpath = ["."]
