@@ -12,6 +12,8 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date
 
+from backlog_client import BacklogAPIError
+
 
 # ------------------------------------------------------------------
 # BacklogMaster: 名前 → ID マッピングを保持するコンテナ
@@ -63,7 +65,7 @@ class BacklogMaster:
                 if u.get("userId"):
                     user_map[u["userId"]] = u["id"]
             master.user_map = user_map
-        except SystemExit:
+        except BacklogAPIError:
             # 権限不足で取得できない場合は空のまま続行
             print("  ⚠ プロジェクトメンバーの取得に失敗しました（担当者の解決はスキップされます）",
                   file=sys.stderr)
@@ -83,7 +85,7 @@ class BacklogMaster:
                 }
                 for cf in custom_fields
             }
-        except SystemExit:
+        except BacklogAPIError:
             print("  ⚠ カスタム属性の取得に失敗しました", file=sys.stderr)
 
         # ステータス
@@ -91,7 +93,7 @@ class BacklogMaster:
         try:
             statuses = client.get_statuses(project_key)
             master.status_map = {s["name"]: s["id"] for s in statuses}
-        except SystemExit:
+        except BacklogAPIError:
             print("  ⚠ ステータスの取得に失敗しました", file=sys.stderr)
 
         return master

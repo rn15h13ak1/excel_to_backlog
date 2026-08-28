@@ -14,10 +14,42 @@ import urllib.parse
 import urllib.request
 
 
-class BacklogNoChangeError(Exception):
+class BacklogError(Exception):
+    """このモジュールが送出する例外の基底クラス。"""
+
+
+class BacklogAPIError(BacklogError):
+    """
+    Backlog API がエラーを返した、または通信に失敗した。
+
+    以前は _handle_http_error() が sys.exit(1) を呼び、呼び出し元が
+    SystemExit を捕捉して継続していたが、
+      - 1件の失敗と「実行全体の中止」を区別できない
+      - 課題の作成には成功したのに後続の更新で終了してしまう
+    といった問題があったため、通常の例外として送出する。
+
+    Attributes
+    ----------
+    status   : int | None   HTTP ステータスコード（通信失敗時は None）
+    endpoint : str          呼び出したエンドポイント
+    detail   : str          Backlog が返したエラーメッセージ
+    errors   : list         Backlog のエラーオブジェクト配列
+    fatal    : bool         True のとき実行全体を中止すべき（認証・権限エラー等）
+    """
+
+    def __init__(self, message, *, status=None, endpoint="", detail="", errors=None, fatal=False):
+        super().__init__(message)
+        self.status = status
+        self.endpoint = endpoint
+        self.detail = detail
+        self.errors = errors or []
+        self.fatal = fatal
+
+
+class BacklogNoChangeError(BacklogError):
     """
     更新内容が現在の課題と同一のため変更なしと判断されたエラー。
-    sys.exit(1) ではなくスキップ扱いにしたい呼び出し元で使用する。
+    エラーではなくスキップ扱いにしたい呼び出し元で使用する。
     """
 
 
@@ -61,6 +93,27 @@ class BacklogClient:
                 )
         return "&".join(parts)
 
+    # 「変更内容がない」ことを示す Backlog のエラーメッセージ断片。
+    # error code 7（InvalidRequestError）は不正なステータス遷移・不正なカスタム
+    # 属性値・件名の長さ超過などにも使われる汎用コードのため、コードだけで
+    # 「変更なし」と判断すると本当の更新失敗を握り潰してしまう。
+    # メッセージが以下のいずれかを含むときのみ「変更なし」と判定する。
+    NO_CHANGE_MESSAGE_HINTS = (
+        "変更されていません",
+        "変更がありません",
+        "No changes",
+        "not changed",
+        "nothing to update",
+    )
+
+    @classmethod
+    def _is_no_change(cls, errors: list, detail: str) -> bool:
+        """HTTP 400 / code 7 のエラーが「変更なし」を意味するか判定する。"""
+        if not any(err.get("code") == 7 for err in errors):
+            return False
+        lowered = detail.lower()
+        return any(hint.lower() in lowered for hint in cls.NO_CHANGE_MESSAGE_HINTS)
+
     def _handle_http_error(
         self,
         e: urllib.error.HTTPError,
@@ -69,11 +122,12 @@ class BacklogClient:
         raise_no_change: bool = False,
     ) -> None:
         """
-        HTTPError を整形して標準エラーに出力し sys.exit(1)。
+        HTTPError を BacklogAPIError（または BacklogNoChangeError）に変換して送出する。
 
-        raise_no_change=True のとき、HTTP 400 かつ Backlog エラーコード 7
-        （InvalidRequestError：変更内容なし等）であれば sys.exit の代わりに
-        BacklogNoChangeError を raise する。
+        raise_no_change=True のとき、HTTP 400 かつ Backlog エラーコード 7 で、
+        かつメッセージが「変更なし」を示す場合のみ BacklogNoChangeError を送出する。
+        判定できない code 7 は安全側に倒して BacklogAPIError とする
+        （本当の更新失敗を「変更なし」と表示して握り潰さないため）。
         """
         detail = ""
         raw_body = ""
@@ -90,32 +144,67 @@ class BacklogClient:
         except Exception:
             pass
 
-        # 変更なしエラーの検出: 更新時に HTTP 400 + error code 7 が返る
-        # ※ error code 7 は InvalidRequestError 全般に使われる汎用コードのため
-        #   誤検出の可能性がある。呼び出し元で実際のメッセージをログに出力して確認すること。
-        if raise_no_change and e.code == 400 and any(
-            err.get("code") == 7 for err in errors
-        ):
-            raise BacklogNoChangeError(detail or "HTTP 400 / code 7（変更なしと判断）")
-
-        print(
-            f"エラー: API呼び出しに失敗しました（HTTP {e.code}）: {endpoint}",
-            file=sys.stderr,
-        )
-        if detail:
-            print(f"  詳細: {detail}", file=sys.stderr)
-        elif raw_body:
-            print(f"  レスポンス: {raw_body[:500]}", file=sys.stderr)
+        if raise_no_change and e.code == 400 and self._is_no_change(errors, detail):
+            raise BacklogNoChangeError(detail or "HTTP 400 / code 7（変更なし）")
 
         hints = {
             400: "リクエストパラメータを確認してください。",
             401: "api_key を確認してください。",
             403: "api_key の権限を確認してください。",
             404: "space_host または project_key を確認してください。",
+            429: "API のレート制限に達しました。時間をおいて再実行してください。",
         }
+        message = f"API 呼び出しに失敗しました（HTTP {e.code}）: {endpoint}"
+        if detail:
+            message += f"\n  詳細: {detail}"
+        elif raw_body:
+            message += f"\n  レスポンス: {raw_body[:500]}"
         if e.code in hints:
-            print(f"  → {hints[e.code]}", file=sys.stderr)
-        sys.exit(1)
+            message += f"\n  → {hints[e.code]}"
+
+        raise BacklogAPIError(
+            message,
+            status=e.code,
+            endpoint=endpoint,
+            detail=detail,
+            errors=errors,
+            # 認証・権限の誤りは行ごとに再試行しても必ず失敗するため実行全体を中止する
+            fatal=e.code in (401, 403),
+        )
+
+    def _send(
+        self,
+        req: urllib.request.Request,
+        endpoint: str,
+        *,
+        raise_no_change: bool = False,
+    ) -> dict | list:
+        """
+        リクエストを送信して JSON を返す。
+
+        HTTPError は _handle_http_error() で BacklogAPIError に変換する。
+        URLError（DNS 失敗・接続リセット・TLS エラー・タイムアウト）も
+        BacklogAPIError に変換する。以前はこれが捕捉されておらず、
+        通信が一度切れるだけでトレースバックとともに実行全体が停止し、
+        それまでに作成した課題のサマリーも表示されなかった。
+        """
+        try:
+            with urllib.request.urlopen(req, timeout=30, context=self.ssl_context) as res:
+                return json.loads(res.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            self._handle_http_error(e, endpoint, raise_no_change=raise_no_change)
+        except urllib.error.URLError as e:
+            raise BacklogAPIError(
+                f"通信に失敗しました: {endpoint}\n  理由: {e.reason}",
+                endpoint=endpoint,
+                detail=str(e.reason),
+            ) from e
+        except TimeoutError as e:
+            raise BacklogAPIError(
+                f"通信がタイムアウトしました（30秒）: {endpoint}",
+                endpoint=endpoint,
+                detail="timeout",
+            ) from e
 
     def _get(self, endpoint: str, params: dict = None) -> dict | list:
         """GET リクエストを送信して JSON を返す"""
@@ -128,12 +217,7 @@ class BacklogClient:
             debug_parts = [p for p in query.split("&") if not p.startswith("apiKey=")]
             print(f"  [DEBUG GET] {endpoint} ?" + "&".join(debug_parts), file=sys.stderr)
 
-        req = urllib.request.Request(url)
-        try:
-            with urllib.request.urlopen(req, timeout=30, context=self.ssl_context) as res:
-                return json.loads(res.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            self._handle_http_error(e, endpoint)
+        return self._send(urllib.request.Request(url), endpoint)
 
     def _post(self, endpoint: str, params: dict) -> dict:
         """POST リクエストを送信して JSON を返す"""
@@ -167,21 +251,10 @@ class BacklogClient:
             method="POST",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-        try:
-            with urllib.request.urlopen(req, timeout=30, context=self.ssl_context) as res:
-                result = json.loads(res.read().decode("utf-8"))
-                if self.debug:
-                    custom_fields = result.get("customFields", [])
-                    if custom_fields:
-                        print(f"  [DEBUG POST response] customFields:", file=sys.stderr)
-                        for cf in custom_fields:
-                            val = cf.get("value")
-                            print(f"    id={cf.get('id')} name={cf.get('name')!r} value={val!r}", file=sys.stderr)
-                    else:
-                        print(f"  [DEBUG POST response] customFields: (なし または 空)", file=sys.stderr)
-                return result
-        except urllib.error.HTTPError as e:
-            self._handle_http_error(e, endpoint)
+        result = self._send(req, endpoint)
+        if self.debug:
+            self._debug_custom_fields("POST", result)
+        return result
 
     def _patch(self, endpoint: str, params: dict, *, raise_no_change: bool = False) -> dict:
         """PATCH リクエストを送信して JSON を返す"""
@@ -212,22 +285,24 @@ class BacklogClient:
             method="PATCH",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-        try:
-            with urllib.request.urlopen(req, timeout=30, context=self.ssl_context) as res:
-                result = json.loads(res.read().decode("utf-8"))
-                if self.debug:
-                    # カスタム属性の反映確認用: レスポンスのカスタム属性フィールドを出力
-                    custom_fields = result.get("customFields", [])
-                    if custom_fields:
-                        print(f"  [DEBUG PATCH response] customFields:", file=sys.stderr)
-                        for cf in custom_fields:
-                            val = cf.get("value")
-                            print(f"    id={cf.get('id')} name={cf.get('name')!r} value={val!r}", file=sys.stderr)
-                    else:
-                        print(f"  [DEBUG PATCH response] customFields: (なし または 空)", file=sys.stderr)
-                return result
-        except urllib.error.HTTPError as e:
-            self._handle_http_error(e, endpoint, raise_no_change=raise_no_change)
+        result = self._send(req, endpoint, raise_no_change=raise_no_change)
+        if self.debug:
+            self._debug_custom_fields("PATCH", result)
+        return result
+
+    @staticmethod
+    def _debug_custom_fields(method: str, result: dict) -> None:
+        """カスタム属性の反映確認用に、レスポンスのカスタム属性を出力する。"""
+        custom_fields = (result or {}).get("customFields", [])
+        if not custom_fields:
+            print(f"  [DEBUG {method} response] customFields: (なし または 空)", file=sys.stderr)
+            return
+        print(f"  [DEBUG {method} response] customFields:", file=sys.stderr)
+        for cf in custom_fields:
+            print(
+                f"    id={cf.get('id')} name={cf.get('name')!r} value={cf.get('value')!r}",
+                file=sys.stderr,
+            )
 
     # ------------------------------------------------------------------
     # マスターデータ取得
@@ -292,14 +367,14 @@ class BacklogClient:
             f"{self.base_url}/issues/{urllib.parse.quote(str(issue_id_or_key))}"
             f"?apiKey={urllib.parse.quote(self.api_key)}"
         )
-        req = urllib.request.Request(url)
+        endpoint = f"/issues/{issue_id_or_key}"
         try:
-            with urllib.request.urlopen(req, timeout=30, context=self.ssl_context) as res:
-                return json.loads(res.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
+            return self._send(urllib.request.Request(url), endpoint)
+        except BacklogAPIError as e:
+            # 存在しない課題キーは「見つからない」であってエラーではない
+            if e.status == 404:
                 return None
-            self._handle_http_error(e, f"/issues/{issue_id_or_key}")
+            raise
 
     def search_issues_by_summary(self, project_id: int, summary: str) -> list:
         """

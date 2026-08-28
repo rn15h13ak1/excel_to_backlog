@@ -40,7 +40,7 @@ from pathlib import Path
 
 import yaml
 
-from backlog_client import BacklogClient, BacklogNoChangeError
+from backlog_client import BacklogAPIError, BacklogClient, BacklogNoChangeError
 from excel_reader import ExcelReader
 from mapper import BacklogMaster, IssueMapper
 
@@ -68,6 +68,34 @@ def validate_backlog_config(backlog_cfg: dict) -> None:
         if not val or val == placeholder:
             print(f"エラー: config.yaml の backlog.{key} を設定してください。", file=sys.stderr)
             sys.exit(1)
+
+
+# ------------------------------------------------------------------
+# 集計
+# ------------------------------------------------------------------
+
+def new_counts() -> dict:
+    """
+    処理結果の集計辞書を返す。
+
+    created       : 新規作成に成功した件数
+    updated       : 既存課題の更新に成功した件数
+    unchanged     : 既存課題と内容が同一で変更が発生しなかった件数
+                    （以前は skipped に混ぜていたが、「処理しなかった」行と
+                     「処理したが変わらなかった」行は意味が異なるため分離した）
+    skipped       : 必須列が空・確認でキャンセル等で処理しなかった件数
+    status_failed : 作成には成功したがステータス変更に失敗した件数
+                    （created にも計上される。課題は Backlog に存在する）
+    error         : 作成・更新に失敗した件数
+    """
+    return {
+        "created": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "skipped": 0,
+        "status_failed": 0,
+        "error": 0,
+    }
 
 
 # ------------------------------------------------------------------
@@ -501,6 +529,22 @@ def generate_preview_file(
 # 課題新規作成（2段階: 未対応で作成 → statusId を更新）
 # ------------------------------------------------------------------
 
+class StatusUpdateFailed(Exception):
+    """
+    課題の作成には成功したが、その後のステータス変更に失敗した。
+
+    課題は Backlog に存在するため、呼び出し元は「作成成功」として issueKey を
+    表示しなければならない。これをエラーとして扱うと、実際には存在する課題が
+    「作成 0 件 / エラー 1 件」と報告され、issueKey も表示されないまま
+    Backlog 上に取り残される。
+    """
+
+    def __init__(self, issue: dict, cause: Exception):
+        super().__init__(str(cause))
+        self.issue = issue
+        self.cause = cause
+
+
 def create_issue_with_status(client: BacklogClient, params: dict) -> dict:
     """
     課題を新規作成する。
@@ -508,6 +552,12 @@ def create_issue_with_status(client: BacklogClient, params: dict) -> dict:
     Backlog API は新規作成時に「完了」などの終了ステータスを直接設定できないため、
     statusId をいったん除いた状態（デフォルト「未対応」）で作成し、
     statusId が指定されていた場合は作成後に update_issue で変更する。
+
+    Raises
+    ------
+    StatusUpdateFailed
+        作成には成功したがステータス変更に失敗した場合。
+        作成済みの課題を .issue に保持する。
     """
     status_id = params.pop("statusId", None)
     try:
@@ -523,6 +573,9 @@ def create_issue_with_status(client: BacklogClient, params: dict) -> dict:
         except BacklogNoChangeError:
             # 作成時点で既にそのステータスだった場合はそのまま続行
             pass
+        except BacklogAPIError as e:
+            # 課題は作成済み。呼び出し元が issueKey を表示できるよう課題ごと渡す。
+            raise StatusUpdateFailed(issue, e) from e
 
     return issue
 
@@ -571,7 +624,7 @@ def process_source(
 
     Returns
     -------
-    dict: {"created": int, "updated": int, "skipped": int, "error": int}
+    dict: new_counts() と同じキーを持つ集計結果
     """
     name = source_cfg.get("name", "（名前なし）")
     excel_cfg = source_cfg.get("excel", {})
@@ -579,7 +632,7 @@ def process_source(
     upsert_cfg = source_cfg.get("upsert") or {}
     upsert_enabled = upsert_cfg.get("enabled", False)
 
-    counts = {"created": 0, "updated": 0, "skipped": 0, "error": 0}
+    counts = new_counts()
 
     print(f"\n{'='*55}")
     print(f"ソース: {name}")
@@ -664,47 +717,62 @@ def process_source(
             counts["skipped"] += 1
             continue
 
+        # API を1度でも呼んだ行だけレート制限用の待機を入れる
+        # （確認プロンプトでキャンセルした行は通信していないため待つ意味がない）
+        api_called = upsert_enabled
         try:
-            if upsert_enabled:
-                existing_key = find_existing_issue(client, upsert_cfg, enriched, params, master)
-                if existing_key:
-                    # projectId は更新時不要なので除去
-                    update_params = {k: v for k, v in params.items() if k != "projectId"}
-                    try:
-                        client.update_issue(existing_key, update_params)
-                        print(f"  [{i}] ✅ 更新: {existing_key} — {params.get('summary', '')}")
-                        counts["updated"] += 1
-                    except BacklogNoChangeError as nce:
-                        # 実際の Backlog エラーメッセージを表示して誤検出を確認できるようにする
-                        print(f"  [{i}] — スキップ（変更なし）: {existing_key} — {params.get('summary', '')}")
-                        print(f"    Backlog message: {nce}", file=sys.stderr)
-                        counts["skipped"] += 1
-                        continue
-                else:
-                    if not confirm_create(params, i):
-                        print(f"  [{i}] — スキップ（新規作成をキャンセル）: {params.get('summary', '')}")
-                        counts["skipped"] += 1
-                        continue
-                    issue = create_issue_with_status(client, params)
-                    print(f"  [{i}] ✅ 作成: {issue['issueKey']} — {issue['summary']}")
-                    counts["created"] += 1
+            existing_key = (
+                find_existing_issue(client, upsert_cfg, enriched, params, master)
+                if upsert_enabled
+                else None
+            )
+
+            if existing_key:
+                # projectId は更新時不要なので除去
+                update_params = {k: v for k, v in params.items() if k != "projectId"}
+                try:
+                    client.update_issue(existing_key, update_params)
+                    print(f"  [{i}] ✅ 更新: {existing_key} — {params.get('summary', '')}")
+                    counts["updated"] += 1
+                except BacklogNoChangeError as nce:
+                    # 実際の Backlog エラーメッセージを表示して誤検出を確認できるようにする
+                    print(f"  [{i}] — 変更なし: {existing_key} — {params.get('summary', '')}")
+                    print(f"    Backlog message: {nce}", file=sys.stderr)
+                    counts["unchanged"] += 1
             else:
                 if not confirm_create(params, i):
                     print(f"  [{i}] — スキップ（新規作成をキャンセル）: {params.get('summary', '')}")
                     counts["skipped"] += 1
                     continue
-                issue = create_issue_with_status(client, params)
-                print(f"  [{i}] ✅ 作成: {issue['issueKey']} — {issue['summary']}")
-                counts["created"] += 1
+                try:
+                    api_called = True
+                    issue = create_issue_with_status(client, params)
+                    print(f"  [{i}] ✅ 作成: {issue['issueKey']} — {issue['summary']}")
+                    counts["created"] += 1
+                except StatusUpdateFailed as e:
+                    # 課題は作成済み。issueKey を必ず表示する（Backlog 上に
+                    # 取り残されたことに気づけないと重複作成につながる）
+                    issue = e.issue
+                    print(
+                        f"  [{i}] ⚠ 作成（ステータス変更は失敗）: "
+                        f"{issue['issueKey']} — {issue['summary']}"
+                    )
+                    print(f"    {e.cause}", file=sys.stderr)
+                    counts["created"] += 1
+                    counts["status_failed"] += 1
 
-        except SystemExit:
-            # BacklogClient のエラーは sys.exit(1) を呼ぶが、
-            # 1件の失敗で全体を止めないように続行する
+        except BacklogAPIError as e:
+            print(f"  [{i}] ❌ 失敗: {params.get('summary', '')}", file=sys.stderr)
+            print(f"    {e}", file=sys.stderr)
             counts["error"] += 1
-            continue
-
-        # API レート制限対策
-        time.sleep(0.3)
+            # 認証・権限エラーは以降の行でも必ず失敗するため実行全体を中止する
+            if e.fatal:
+                raise
+        finally:
+            # API レート制限対策。以前は成功パスにしか無かったため、
+            # エラーが続くと逆に速くリクエストが飛んでいた。
+            if api_called:
+                time.sleep(0.3)
 
     return counts
 
@@ -836,24 +904,58 @@ def main():
         return
 
     # 各ソースを処理
-    total = {"created": 0, "updated": 0, "skipped": 0, "error": 0}
-    for source_cfg in sources_cfg:
-        counts = process_source(source_cfg, client, master, dry_run=dry_run)
-        for k in total:
-            total[k] += counts[k]
+    # 途中で中断・失敗しても、それまでの処理結果を必ず表示する。
+    # 以前は通信エラーがトレースバックのまま抜けてサマリーが出ず、
+    # 何件作成済みかを知る手段がターミナルのログしか無かった。
+    total = new_counts()
+    interrupted = ""
+    try:
+        for source_cfg in sources_cfg:
+            counts = process_source(source_cfg, client, master, dry_run=dry_run)
+            for k in total:
+                total[k] += counts[k]
+    except KeyboardInterrupt:
+        interrupted = "ユーザーによる中断（Ctrl-C）"
+    except BacklogAPIError as e:
+        interrupted = f"API エラーのため中止しました\n  {e}"
+    finally:
+        print_summary(total, dry_run=dry_run, interrupted=interrupted)
 
-    # サマリー
+    if interrupted:
+        sys.exit(1)
+
+
+def print_summary(total: dict, *, dry_run: bool, interrupted: str = "") -> None:
+    """処理結果のサマリーを表示する。"""
     print(f"\n{'='*55}")
-    print("処理完了")
+    print("処理完了" if not interrupted else "処理中断")
     print(f"{'='*55}")
+
+    if interrupted:
+        print(f"  ⚠ {interrupted}")
+        print()
+
     if dry_run:
         print("（DRY RUN のため実際の登録は行っていません）")
+        if total["skipped"]:
+            print(f"  スキップ: {total['skipped']} 件")
+        if total["error"]:
+            print(f"  エラー: {total['error']} 件  ← 読み込み・設定に問題があります")
         print("  実際に登録するには --execute を付けて再実行してください。")
-    else:
-        print(f"  作成: {total['created']} 件")
-        print(f"  更新: {total['updated']} 件")
-        print(f"  スキップ: {total['skipped']} 件")
-        print(f"  エラー: {total['error']} 件")
+        return
+
+    print(f"  作成: {total['created']} 件")
+    print(f"  更新: {total['updated']} 件")
+    print(f"  変更なし: {total['unchanged']} 件")
+    print(f"  スキップ: {total['skipped']} 件")
+    print(f"  エラー: {total['error']} 件")
+    if total["status_failed"]:
+        print()
+        print(
+            f"  ⚠ うち {total['status_failed']} 件は作成できましたが"
+            f"ステータス変更に失敗しています。"
+        )
+        print("    課題は Backlog に存在します。上のログの issueKey を確認してください。")
 
 
 if __name__ == "__main__":
