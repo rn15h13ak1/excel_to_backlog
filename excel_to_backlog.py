@@ -45,6 +45,7 @@ from backlog_client import BacklogAPIError, BacklogClient, BacklogNoChangeError
 from excel_reader import ExcelReader
 from mapper import BacklogMaster, IssueMapper
 from run_log import RunLog, default_log_path, load_completed
+from summary_index import SummaryIndex
 
 
 # ------------------------------------------------------------------
@@ -112,6 +113,7 @@ def find_existing_issue(
     row: dict,
     params: dict,
     master: BacklogMaster,
+    summary_index: SummaryIndex | None = None,
 ) -> str | None:
     """
     upsert 設定に従い既存課題の issueKey を返す。
@@ -119,7 +121,7 @@ def find_existing_issue(
 
     upsert_cfg キー:
         key_col       : str  Excel の列名（issueKey が記入されている列）
-        match_summary : bool 件名で検索して一致する課題を探す
+        match_summary : bool 件名で一致する課題を探す
     """
     # ① Excel の key_col に issueKey が記入されている場合
     key_col = upsert_cfg.get("key_col")
@@ -136,19 +138,13 @@ def find_existing_issue(
             )
             return None
 
-    # ② 件名で検索
-    # params["summary"] は map_row() で normalize_summary() 済みのため、
-    # Backlog 側の既存件名も同じ正規化を適用して比較することで表記の揺れを吸収する
-    if upsert_cfg.get("match_summary"):
+    # ② 件名で照合
+    # params["summary"] は map_row() で normalize_summary() 済み。
+    # 索引側にも同じ正規化を適用しているため表記の揺れを吸収できる。
+    if upsert_cfg.get("match_summary") and summary_index is not None:
         summary = params.get("summary", "")
         if summary:
-            candidates = client.search_issues_by_summary(master.project_id, summary)
-            exact = [
-                i for i in candidates
-                if IssueMapper.normalize_summary(i.get("summary", "")) == summary
-            ]
-            if exact:
-                return exact[0]["issueKey"]
+            return summary_index.find(summary)
 
     return None
 
@@ -624,6 +620,7 @@ def process_source(
     dry_run: bool,
     run_log: RunLog | None = None,
     completed: set[tuple[str, str]] | None = None,
+    summary_index: SummaryIndex | None = None,
 ) -> dict:
     """
     1つのソース（Excel ファイル）を処理して作成・更新件数を返す。
@@ -743,7 +740,8 @@ def process_source(
         api_called = upsert_enabled
         try:
             existing_key = (
-                find_existing_issue(client, upsert_cfg, enriched, params, master)
+                find_existing_issue(client, upsert_cfg, enriched, params, master,
+                                    summary_index=summary_index)
                 if upsert_enabled
                 else None
             )
@@ -778,6 +776,8 @@ def process_source(
                     counts["created"] += 1
                     log(row=i, action="created", issue_key=issue["issueKey"],
                         summary=issue["summary"])
+                    if summary_index is not None:
+                        summary_index.add(issue["summary"], issue["issueKey"])
                 except StatusUpdateFailed as e:
                     # 課題は作成済み。issueKey を必ず表示する（Backlog 上に
                     # 取り残されたことに気づけないと重複作成につながる）
@@ -789,6 +789,8 @@ def process_source(
                     print(f"    {e.cause}", file=sys.stderr)
                     counts["created"] += 1
                     counts["status_failed"] += 1
+                    if summary_index is not None:
+                        summary_index.add(issue["summary"], issue["issueKey"])
                     log(row=i, action="created_status_failed",
                         issue_key=issue["issueKey"], summary=issue["summary"],
                         detail=str(e.cause))
@@ -962,6 +964,9 @@ def main():
 
     completed = load_completed(args.resume) if args.resume else None
 
+    # 件名索引は遅延構築のため、match_summary を使うソースが無ければ API を呼ばない
+    summary_index = SummaryIndex(client, master.project_id)
+
     with ExitStack() as stack:
         run_log = stack.enter_context(RunLog(log_path)) if log_path else None
         try:
@@ -969,6 +974,7 @@ def main():
                 counts = process_source(
                     source_cfg, client, master, dry_run=dry_run,
                     run_log=run_log, completed=completed,
+                    summary_index=summary_index,
                 )
                 for k in total:
                     total[k] += counts[k]
