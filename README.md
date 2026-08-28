@@ -24,6 +24,10 @@ Excel で管理しているタスク・問い合わせ一覧などを Backlog �
 pip install openpyxl pyyaml
 ```
 
+```bash
+pip install -e ".[dev]"   # 開発時（テスト実行に必要）
+```
+
 ---
 
 ## クイックスタート
@@ -484,3 +488,32 @@ backlog:
 backlog:
   base_path: "/backlog"
 ```
+
+---
+
+## 開発
+
+### テスト
+
+```bash
+pytest
+```
+
+`push` とプルリクエストで GitHub Actions が自動実行します（Python 3.10 / 3.12）。
+
+カバレッジを見る場合:
+
+```bash
+pytest --cov=. --cov-report=term-missing
+```
+
+主要な観点は以下のファイルにまとまっています。
+
+| ファイル | 観点 |
+|---|---|
+| `test_upsert_behavior.py` | key_col と match_summary の違い（運用方法の選択に直結） |
+| `test_source_excel_untouched.py` | 元 Excel を書き換えないこと |
+| `test_cli.py` | 引数・確認フロー・実行ログ・中断時の扱い |
+| `test_http_layer.py` | リクエストボディの組み立て（過去に2回バグが出た箇所） |
+| `test_excel_reader.py` | 取り消し線・重複ヘッダー・フィルタ |
+| `test_mapper.py` | 日付・テンプレート・担当者・カスタム属性 |
