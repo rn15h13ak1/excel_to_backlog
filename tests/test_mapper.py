@@ -276,3 +276,19 @@ class TestCustomFields:
         m = mapper_for({"custom_fields": [{"field_name": "カテゴリ", "col_name": "分類"}]},
                        cf_master)
         assert "customField_5" not in m.map_row({"件名": "t", "分類": ""})
+
+    def test_選択肢型で選択肢一覧が空なら名前を送らずスキップする(self, master, capsys):
+        """
+        マスター取得が部分的に失敗すると items が空になる。そのまま送ると
+        ID ではなく選択肢名を送ることになり HTTP 400 になる。
+        """
+        master.custom_field_map = {
+            "カテゴリ": {"id": 5, "typeId": 5, "items": {}},   # 選択肢が取れていない
+        }
+        m = mapper_for({"custom_fields": [{"field_name": "カテゴリ", "col_name": "分類"}]},
+                       master)
+        params = m.map_row({"件名": "t", "分類": "設計"})
+
+        assert "customField_5" not in params
+        err = capsys.readouterr().err
+        assert "選択肢一覧を取得できていません" in err

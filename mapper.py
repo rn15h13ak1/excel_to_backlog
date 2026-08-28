@@ -562,7 +562,21 @@ class IssueMapper:
             single_select_types = {5, 8}  # [] なし単一値形式
             all_select_types = multi_select_types | single_select_types
 
-            if type_id in all_select_types and items_map:
+            # 選択肢型なのに選択肢一覧が空の場合、そのまま else へ落ちると
+            # ID ではなく選択肢名の文字列を送ってしまい、Backlog は HTTP 400 を
+            # 返す。原因が分かりにくいため、ここで検出して理由を示す。
+            # （マスターデータ取得が権限不足などで部分的に失敗した場合に起きる）
+            if type_id in all_select_types and not items_map:
+                print(
+                    f"  ⚠ カスタム属性「{field_name}」は選択肢型（typeId={type_id}）ですが"
+                    f"選択肢一覧を取得できていません（スキップ）\n"
+                    f"    → 起動時のカスタム属性取得に失敗した可能性があります。"
+                    f"api_key の権限を確認してください。",
+                    file=sys.stderr,
+                )
+                continue
+
+            if type_id in all_select_types:
                 resolved_ids = []
                 for mv in mapped_values:
                     resolved = items_map.get(mv)
