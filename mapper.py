@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import date
 
 
 # ------------------------------------------------------------------
@@ -415,21 +416,69 @@ class IssueMapper:
             return None
         return sid
 
-    @staticmethod
-    def _normalize_date(value: str) -> str | None:
+    # 年月日の区切りを許容してマッチする。ゼロ埋めの有無を問わない。
+    # 例: 2025-01-05 / 2025/1/5 / 2025年1月5日
+    # 末尾に時刻などが続く場合も先頭の日付部分だけを取り出す。
+    _DATE_RE = re.compile(r"^\s*(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})\s*[日]?")
+
+    @classmethod
+    def _normalize_date(cls, value: str) -> str | None:
         """
-        "YYYY/MM/DD" → "YYYY-MM-DD" に変換。
-        既に "YYYY-MM-DD" 形式ならそのまま返す。
-        空文字列や変換不可は None を返す。
+        日付文字列を Backlog API の "YYYY-MM-DD" 形式に変換する。
+
+        Excel の日付型セルは ExcelReader が "YYYY/MM/DD" に整形済みだが、
+        文字列として手入力された日付はゼロ埋めされていないことが多いため、
+        1〜2 桁の月日や和文の区切りも受け付ける。
+
+        受理例:
+            "2025-01-05" / "2025/1/5" / "2025年1月5日" / "2025/01/05 10:00"
+        None を返す例:
+            "" / "R7/1/5"（和暦）/ "9/1"（年がない）/ "2025/13/1"（不正な日付）
+
+        変換できなかった場合は None を返す。呼び出し元は値が非空なのに
+        None が返ったときに警告を出すこと（無言で捨てないため）。
         """
-        if not value:
+        if not value or not value.strip():
             return None
-        # YYYY/MM/DD → YYYY-MM-DD
-        normalized = value.replace("/", "-")
-        # 簡易バリデーション: YYYY-MM-DD
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
-            return normalized
-        return None
+
+        m = cls._DATE_RE.match(value)
+        if not m:
+            return None
+
+        year, month, day = (int(g) for g in m.groups())
+        try:
+            # 実在する日付かを検証する（2025/13/1・2025/2/30 などを弾く）
+            return date(year, month, day).strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+
+    def _resolve_date(self, row: dict[str, str], cfg_key: str, label: str) -> str | None:
+        """
+        due_date_col / start_date_col の設定値から日付文字列を解決する。
+
+        設定値が "{{" を含む場合はテンプレートとして展開し、
+        含まない場合は列名として row から値を取得する（後方互換）。
+
+        セルに値があるのに日付として解釈できなかった場合は警告を出力する。
+        担当者・ステータス・カスタム属性と同様、無言では捨てない。
+        """
+        col = self.cfg.get(cfg_key)
+        if not col:
+            return None
+
+        raw = (
+            self._render_template(col, row)
+            if "{{" in str(col)
+            else row.get(col, "")
+        )
+        normalized = self._normalize_date(raw)
+        if normalized is None and raw and raw.strip():
+            print(
+                f"  ⚠ {label}「{raw.strip()}」を日付として解釈できません（未設定のまま登録します）\n"
+                f"    受理する形式: YYYY-MM-DD / YYYY/M/D / YYYY年M月D日",
+                file=sys.stderr,
+            )
+        return normalized
 
     def _resolve_custom_fields(self, row: dict[str, str]) -> dict:
         """
@@ -620,30 +669,14 @@ class IssueMapper:
                 params["description"] = self._render_template(template, row, formatted_row=formatted_row)
 
         # 任意: dueDate（期限日）
-        due_col = self.cfg.get("due_date_col")
-        if due_col:
-            # {{列名}} を含む場合はテンプレート展開して日付文字列を得る
-            # 含まない場合は列名として row から値を取得する（後方互換）
-            due_value = (
-                self._render_template(due_col, row)
-                if "{{" in due_col
-                else row.get(due_col, "")
-            )
-            due = self._normalize_date(due_value)
-            if due:
-                params["dueDate"] = due
+        due = self._resolve_date(row, "due_date_col", "期限日")
+        if due:
+            params["dueDate"] = due
 
         # 任意: startDate（開始日）
-        start_col = self.cfg.get("start_date_col")
-        if start_col:
-            start_value = (
-                self._render_template(start_col, row)
-                if "{{" in start_col
-                else row.get(start_col, "")
-            )
-            start = self._normalize_date(start_value)
-            if start:
-                params["startDate"] = start
+        start = self._resolve_date(row, "start_date_col", "開始日")
+        if start:
+            params["startDate"] = start
 
         # 任意: assigneeId（担当者）
         assignee_id = self._resolve_assignee_id(row)

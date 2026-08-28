@@ -15,6 +15,7 @@ excel_md_tool (useExcel.ts) と同等のロジックを Python / openpyxl で実
 from __future__ import annotations
 
 import re
+import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -255,8 +256,13 @@ class ExcelReader:
         """
         ヘッダー行（header_start_row ～ header_end_row）を読み取り、
         複数行の場合は MULTI_HEADER_SEP で結合したヘッダー名リストを返す。
+
+        ヘッダー名が重複した場合は、2 つ目以降に " (2)" のような連番を付けて
+        一意化する。行データは {ヘッダー名: 値} の dict のため、重複したままでは
+        後ろの列が前の列を上書きして内容が失われる。
+        一意化した場合は警告を出力する（設定側は 1 つ目を元の名前で参照できる）。
         """
-        headers = []
+        raw_headers = []
         for col_idx in range(col_start_idx, col_end_idx + 1):
             parts = []
             for row_idx in range(self.header_start_row, self.header_end_row + 1):
@@ -265,7 +271,55 @@ class ExcelReader:
                 val = cell_to_str(cell.value).replace("\r", "").replace("\n", "")
                 if val:
                     parts.append(val)
-            headers.append(self.MULTI_HEADER_SEP.join(parts) if parts else f"Col{col_idx + 1}")
+            raw_headers.append(
+                self.MULTI_HEADER_SEP.join(parts) if parts else f"Col{col_idx + 1}"
+            )
+
+        return self._uniquify_headers(raw_headers)
+
+    @staticmethod
+    def _uniquify_headers(raw_headers: list[str]) -> list[str]:
+        """
+        重複したヘッダー名に連番を付けて一意化する。
+
+        ["備考", "件名", "備考"] → ["備考", "件名", "備考 (2)"]
+
+        1 つ目は元の名前のまま残すため、既存の設定は左端の列を参照し続ける。
+        一意化が発生した列は警告として一覧を出力する。
+        """
+        seen: dict[str, int] = {}
+        headers: list[str] = []
+        renamed: list[tuple[str, str]] = []
+
+        for name in raw_headers:
+            count = seen.get(name, 0) + 1
+            seen[name] = count
+            if count == 1:
+                headers.append(name)
+                continue
+            # 連番付きの名前も既存と衝突しうるため、空くまで進める
+            unique = f"{name} ({count})"
+            while unique in seen:
+                count += 1
+                unique = f"{name} ({count})"
+            seen[name] = count
+            seen[unique] = 1
+            headers.append(unique)
+            renamed.append((name, unique))
+
+        if renamed:
+            print(
+                f"  ⚠ ヘッダー名が重複しています（{len(renamed)} 件）。"
+                f"内容が失われないよう連番を付けて区別します:",
+                file=sys.stderr,
+            )
+            for original, unique in renamed:
+                print(f"      「{original}」→「{unique}」", file=sys.stderr)
+            print(
+                "    設定から「" + renamed[0][0] + "」を参照すると左端の列が使われます。",
+                file=sys.stderr,
+            )
+
         return headers
 
     def _build_rows(
