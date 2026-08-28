@@ -623,9 +623,11 @@ def confirm_run(sources_cfg: list, master: BacklogMaster, assume_yes: bool) -> N
 
     try:
         answer = input("  実行しますか？ [y/N]: ").strip().lower()
-    except EOFError:
+    except (EOFError, OSError):
         # 非対話環境で黙ってスキップすると「成功したように見える無処理」に
         # なるため、明示的にエラーとして止める。
+        # パイプ経由の入力は EOFError、stdin が存在しない環境（cron・
+        # デーモン等）では OSError になるため両方を捕捉する。
         raise ConfirmationDeclined(
             "非対話環境では確認を求められません。実行するには --yes を付けてください。"
         ) from None
@@ -991,11 +993,14 @@ def main():
     # 件名索引は遅延構築のため、match_summary を使うソースが無ければ API を呼ばない
     summary_index = SummaryIndex(client, master.project_id)
 
-    try:
-        confirm_run(sources_cfg, master, assume_yes=args.yes)
-    except ConfirmationDeclined as e:
-        print(f"\n  {e}", file=sys.stderr)
-        sys.exit(1)
+    # 確認は Backlog へ書き込む場合のみ。ドライランは何も変更しないため、
+    # 確認を求めると無意味な入力待ちになり、非対話環境では実行すらできなくなる。
+    if not dry_run:
+        try:
+            confirm_run(sources_cfg, master, assume_yes=args.yes)
+        except ConfirmationDeclined as e:
+            print(f"\n  {e}", file=sys.stderr)
+            sys.exit(1)
 
     with ExitStack() as stack:
         run_log = stack.enter_context(RunLog(log_path)) if log_path else None
