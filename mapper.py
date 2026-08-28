@@ -605,7 +605,16 @@ class IssueMapper:
                         )
                     params[f"customField_{field_id}"] = resolved_ids[0]
             else:
-                # 非選択肢型は最初の値のみ使用（value_separator は実質無効）
+                # 非選択肢型（文字列・数値・日付など）は最初の値のみ使用する。
+                # value_separator を指定していても分割は活きないため、
+                # 単一選択型と同様に捨てた値があることを警告する。
+                if len(mapped_values) > 1:
+                    print(
+                        f"  ⚠ カスタム属性「{field_name}」は選択肢型ではない（typeId={type_id}）ため"
+                        f" value_separator による分割は無効です。先頭の値のみ使用します: "
+                        f"{mapped_values[0]}",
+                        file=sys.stderr,
+                    )
                 params[f"customField_{field_id}"] = mapped_values[0] if mapped_values else value
 
         return params

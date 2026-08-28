@@ -292,3 +292,13 @@ class TestCustomFields:
         assert "customField_5" not in params
         err = capsys.readouterr().err
         assert "選択肢一覧を取得できていません" in err
+
+    def test_非選択肢型で分割しても捨てた値を警告する(self, cf_master, capsys):
+        """単一選択型は警告を出すのに、非選択肢型だけ無言だった。"""
+        m = mapper_for({"custom_fields": [
+            {"field_name": "メモ", "col_name": "備考", "value_separator": ","}
+        ]}, cf_master)
+        params = m.map_row({"件名": "t", "備考": "A,B,C"})
+
+        assert params["customField_7"] == "A"
+        assert "先頭の値のみ使用します" in capsys.readouterr().err
