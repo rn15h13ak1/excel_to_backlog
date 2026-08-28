@@ -206,6 +206,123 @@ def apply_filters(
 
 
 # ------------------------------------------------------------------
+# 列名参照の事前検証
+# ------------------------------------------------------------------
+
+# inject_meta() が行データに注入するキー。Excel の列ではないがテンプレートから
+# 参照できるため、列名検証では既知の名前として扱う。
+META_KEYS = {"_source_name", "_excel_path", "_excel_sheet"}
+
+
+def collect_referenced_columns(source_cfg: dict) -> list[tuple[str, str]]:
+    """
+    source_cfg が参照している Excel 列名を (設定パス, 列名) のリストで返す。
+
+    テンプレート項目（summary_template / description_template）は
+    IssueMapper.extract_template_columns() でプレースホルダーを展開する。
+    due_date_col / start_date_col は map_row() と同じ判定（"{{" を含むか）で
+    テンプレートと列名を区別する。
+    """
+    refs: list[tuple[str, str]] = []
+    mapping_cfg = source_cfg.get("issue_mapping") or {}
+    upsert_cfg = source_cfg.get("upsert") or {}
+
+    def add(path: str, value) -> None:
+        # 列名は strip せずそのまま登録する。
+        # filter_rows() や _resolve_*() は設定値を strip せずに row の
+        # キーと突き合わせるため、前後の空白の有無まで含めて一致させる必要がある。
+        # （テンプレートの {{列名}} だけは _render_template() 側が strip するため、
+        #   add_template() 経由で strip 済みの名前が渡る）
+        if isinstance(value, str) and value.strip():
+            refs.append((path, value))
+
+    def add_template(path: str, template: str) -> None:
+        for col in sorted(IssueMapper.extract_template_columns(template)):
+            refs.append((path, col))
+
+    # ---- フィルター ----
+    for i, cond in enumerate(source_cfg.get("filters") or []):
+        add(f"filters[{i}].col_name", cond.get("col_name"))
+    for gi, group in enumerate(source_cfg.get("filter_groups") or []):
+        for i, cond in enumerate(group.get("filters") or []):
+            add(f"filter_groups[{gi}].filters[{i}].col_name", cond.get("col_name"))
+
+    # ---- 件名 ----
+    summary_template = mapping_cfg.get("summary_template", "")
+    if summary_template:
+        add_template("issue_mapping.summary_template", summary_template)
+    else:
+        add("issue_mapping.summary_col", mapping_cfg.get("summary_col"))
+
+    # ---- 本文 ----
+    # description_template は template モードでのみ使われる
+    if mapping_cfg.get("description_format", "template") != "auto":
+        add_template(
+            "issue_mapping.description_template",
+            mapping_cfg.get("description_template", ""),
+        )
+    # description_cols は auto モードと {{auto}} の両方で使われるため常に検証する
+    for i, col in enumerate(mapping_cfg.get("description_cols") or []):
+        add(f"issue_mapping.description_cols[{i}]", col)
+
+    # ---- 日付（列名またはテンプレート）----
+    for key in ("due_date_col", "start_date_col"):
+        value = mapping_cfg.get(key)
+        if not value:
+            continue
+        if "{{" in str(value):
+            add_template(f"issue_mapping.{key}", str(value))
+        else:
+            add(f"issue_mapping.{key}", value)
+
+    # ---- その他の単一列 ----
+    add("issue_mapping.assignee_col", mapping_cfg.get("assignee_col"))
+    add("issue_mapping.status_col", mapping_cfg.get("status_col"))
+    add("upsert.key_col", upsert_cfg.get("key_col"))
+
+    # ---- 必須列・カスタム属性 ----
+    for i, col in enumerate(mapping_cfg.get("required_cols") or []):
+        add(f"issue_mapping.required_cols[{i}]", col)
+    for i, cf in enumerate(mapping_cfg.get("custom_fields") or []):
+        add(f"issue_mapping.custom_fields[{i}].col_name", cf.get("col_name"))
+
+    return refs
+
+
+def validate_column_references(source_cfg: dict, headers: list[str]) -> list[str]:
+    """
+    設定が参照する列名がすべてヘッダーに存在するか検証する。
+
+    存在しない参照が1件でもあれば、その内容を説明する行のリストを返す。
+    すべて解決できる場合は空リストを返す。
+
+    列名の不一致は「その条件が無視される」「プレースホルダーが未展開のまま
+    件名になる」といった無言の誤動作につながるため、警告ではなく実行前の
+    エラーとして扱う（呼び出し元がソースの処理を中止する）。
+    """
+    known = set(headers) | META_KEYS
+    unknown = [(path, col) for path, col in collect_referenced_columns(source_cfg)
+               if col not in known]
+    if not unknown:
+        return []
+
+    lines = [
+        f"設定が参照する列名が Excel のヘッダーに存在しません（{len(unknown)} 件）:",
+    ]
+    for path, col in unknown:
+        # 前後の空白は「」で囲んでも見えないため、strip すると一致する場合は明示する
+        hint = ""
+        if col.strip() != col and col.strip() in known:
+            hint = f"  ← 前後の空白を除けば一致します（{col!r}）"
+        lines.append(f"    {path}: 「{col}」{hint}")
+    lines.append(f"  ヘッダー: {headers}")
+    lines.append(
+        "  → 列名の綴り・前後の空白・複数行ヘッダーの結合結果（\" / \" 区切り）を確認してください。"
+    )
+    return lines
+
+
+# ------------------------------------------------------------------
 # プレビューファイル生成
 # ------------------------------------------------------------------
 
@@ -300,6 +417,17 @@ def generate_preview_for_source(
         lines.append("")
         lines.append("> ヒント: Excelファイルが破損または非標準形式の可能性があります。")
         lines.append(f"> 詳細: `{traceback.format_exc()}`")
+        lines.append("")
+        output_path.write_text("\n".join(lines), encoding="utf-8")
+        return 0
+
+    # 列名参照の検証（process_source と同じ基準で中止する）
+    errors = validate_column_references(source_cfg, headers)
+    if errors:
+        lines.append(f"> ⚠ {errors[0]}")
+        lines.append("")
+        for line in errors[1:]:
+            lines.append(f"> `{line.strip()}`")
         lines.append("")
         output_path.write_text("\n".join(lines), encoding="utf-8")
         return 0
@@ -480,6 +608,18 @@ def process_source(
         return counts
 
     print(f"  読込行数: {len(rows)} 行（フィルター前）")
+
+    # ---- 列名参照の検証 ----
+    # 列名が1つでも一致しないと、フィルター条件が無視されて全行が対象になる、
+    # プレースホルダーが未展開のまま件名になる等の無言の誤動作が起きるため、
+    # 行を処理する前に中止する。
+    errors = validate_column_references(source_cfg, headers)
+    if errors:
+        print(f"\n  エラー: {errors[0]}", file=sys.stderr)
+        for line in errors[1:]:
+            print(line, file=sys.stderr)
+        counts["error"] += 1
+        return counts
 
     # フィルタリング（filters / filter_groups 共通処理）
     filtered_rows = apply_filters(rows, source_cfg, headers)

@@ -145,6 +145,14 @@ class IssueMapper:
     description_cols   : list  "auto" 時に出力する列名リスト（省略時: 全列）
     """
 
+    # テンプレート内のプレースホルダーを抽出する正規表現。
+    # _render_template() の Step 2 と同じパターンを使う。
+    # テンプレート構文を変更する場合は両方を更新すること。
+    TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{(.+?)\}\}")
+
+    # 列名ではない特殊プレースホルダー（列名検証の対象外）
+    SPECIAL_PLACEHOLDERS = {"auto"}
+
     def __init__(self, mapping_config: dict, master: BacklogMaster, headers: list[str] = None):
         self.cfg = mapping_config
         self.master = master
@@ -153,6 +161,29 @@ class IssueMapper:
     # ------------------------------------------------------------------
     # テンプレート処理
     # ------------------------------------------------------------------
+
+    @classmethod
+    def extract_template_columns(cls, template: str) -> set[str]:
+        """
+        テンプレート文字列が参照している列名を抽出して返す。
+
+        対象:
+            {{列名}}       通常のプレースホルダー
+            {{#列名}}      条件ブロックの開始
+            {{/列名}}      条件ブロックの終了
+
+        除外:
+            {{auto}} などの特殊プレースホルダー（SPECIAL_PLACEHOLDERS）
+
+        起動時の列名検証（validate_column_references）から使用する。
+        """
+        cols: set[str] = set()
+        for m in cls.TEMPLATE_PLACEHOLDER_RE.finditer(template or ""):
+            # 条件ブロックの {{#列名}} / {{/列名}} から記号を除去して列名を得る
+            name = m.group(1).strip().lstrip("#/").strip()
+            if name and name not in cls.SPECIAL_PLACEHOLDERS:
+                cols.add(name)
+        return cols
 
     def _render_template(
         self,
