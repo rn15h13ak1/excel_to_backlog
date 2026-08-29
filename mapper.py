@@ -160,6 +160,16 @@ class IssueMapper:
         self.cfg = mapping_config
         self.master = master
         self.headers = headers or []  # auto モードでの列順序に使用
+        # map_row() 1 回分の警告。担当者・日付・ステータス・カスタム属性が
+        # 解決できず未設定のまま登録される場合に積む。
+        # 以前は stderr へ直接出していたため行番号も件名も付かず、
+        # 「作成されたが一部フィールドが落ちた」ことを実行ログから追えなかった。
+        self.warnings: list[str] = []
+
+    def _warn(self, message: str) -> None:
+        """この行の警告として記録し、標準エラーにも出力する。"""
+        self.warnings.append(" ".join(message.split()))
+        print(f"  ⚠ {message}", file=sys.stderr)
 
     # ------------------------------------------------------------------
     # テンプレート処理
@@ -393,10 +403,9 @@ class IssueMapper:
                 if v not in seen_ids:
                     seen_ids.add(v)
                     unique_names.append(k)
-            print(
-                f"  ⚠ 担当者「{name}」がプロジェクトメンバーに見つかりません（スキップ）\n"
-                f"    利用可能（表示名 or ログインID）: {unique_names}",
-                file=sys.stderr,
+            self._warn(
+                f"担当者「{name}」がプロジェクトメンバーに見つかりません（未設定）\n"
+                f"    利用可能（表示名 or ログインID）: {unique_names}"
             )
         return uid
 
@@ -418,18 +427,16 @@ class IssueMapper:
         status_map_cfg = self.cfg.get("status_map") or {}
         backlog_status_name = status_map_cfg.get(excel_status)
         if backlog_status_name is None:
-            print(
-                f"  ⚠ ステータス「{excel_status}」は status_map に定義されていません（スキップ）",
-                file=sys.stderr,
+            self._warn(
+                f"ステータス「{excel_status}」は status_map に定義されていません（未設定）"
             )
             return None
         sid = self.master.status_map.get(backlog_status_name)
         if sid is None:
             available = list(self.master.status_map.keys())
-            print(
-                f"  ⚠ Backlog ステータス「{backlog_status_name}」が見つかりません（スキップ）\n"
-                f"    利用可能: {available}",
-                file=sys.stderr,
+            self._warn(
+                f"Backlog ステータス「{backlog_status_name}」が見つかりません（未設定）\n"
+                f"    利用可能: {available}"
             )
             return None
         return sid
@@ -491,10 +498,9 @@ class IssueMapper:
         )
         normalized = self._normalize_date(raw)
         if normalized is None and raw and raw.strip():
-            print(
-                f"  ⚠ {label}「{raw.strip()}」を日付として解釈できません（未設定のまま登録します）\n"
-                f"    受理する形式: YYYY-MM-DD / YYYY/M/D / YYYY年M月D日",
-                file=sys.stderr,
+            self._warn(
+                f"{label}「{raw.strip()}」を日付として解釈できません（未設定）\n"
+                f"    受理する形式: YYYY-MM-DD / YYYY/M/D / YYYY年M月D日"
             )
         return normalized
 
@@ -508,10 +514,7 @@ class IssueMapper:
             col_name = cf_cfg.get("col_name", "")
 
             if field_name not in self.master.custom_field_map:
-                print(
-                    f"  ⚠ カスタム属性「{field_name}」が見つかりません（スキップ）",
-                    file=sys.stderr,
-                )
+                self._warn(f"カスタム属性「{field_name}」が見つかりません（未設定）")
                 continue
 
             cf_info = self.master.custom_field_map[field_name]
@@ -551,9 +554,8 @@ class IssueMapper:
                             except re.error:
                                 pass  # 不正な正規表現はスキップ
                     if mapped is None:
-                        print(
-                            f"  ⚠ カスタム属性「{field_name}」の値「{raw}」は value_map に定義されていません（スキップ）",
-                            file=sys.stderr,
+                        self._warn(
+                            f"カスタム属性「{field_name}」の値「{raw}」は value_map に定義されていません（未設定）"
                         )
                         skip = True
                         break
@@ -583,12 +585,11 @@ class IssueMapper:
             # 返す。原因が分かりにくいため、ここで検出して理由を示す。
             # （マスターデータ取得が権限不足などで部分的に失敗した場合に起きる）
             if type_id in all_select_types and not items_map:
-                print(
-                    f"  ⚠ カスタム属性「{field_name}」は選択肢型（typeId={type_id}）ですが"
-                    f"選択肢一覧を取得できていません（スキップ）\n"
+                self._warn(
+                    f"カスタム属性「{field_name}」は選択肢型（typeId={type_id}）ですが"
+                    f"選択肢一覧を取得できていません（未設定）\n"
                     f"    → 起動時のカスタム属性取得に失敗した可能性があります。"
-                    f"api_key の権限を確認してください。",
-                    file=sys.stderr,
+                    f"api_key の権限を確認してください。"
                 )
                 continue
 
@@ -597,9 +598,8 @@ class IssueMapper:
                 for mv in mapped_values:
                     resolved = items_map.get(mv)
                     if resolved is None:
-                        print(
-                            f"  ⚠ カスタム属性「{field_name}」の選択肢「{mv}」が見つかりません（スキップ）",
-                            file=sys.stderr,
+                        self._warn(
+                            f"カスタム属性「{field_name}」の選択肢「{mv}」が見つかりません（未設定）"
                         )
                         skip = True
                         break
@@ -614,10 +614,9 @@ class IssueMapper:
                     # 単一選択型（5/8）: int で渡す → _post/_patch が customField_{id} として送信
                     # value_separator で複数値が指定された場合でも先頭の1件のみ使用する
                     if len(resolved_ids) > 1:
-                        print(
-                            f"  ⚠ カスタム属性「{field_name}」は単一選択型（typeId={type_id}）のため"
-                            f" 先頭の値のみ使用します: {mapped_values[0]}",
-                            file=sys.stderr,
+                        self._warn(
+                            f"カスタム属性「{field_name}」は単一選択型（typeId={type_id}）のため"
+                            f" 先頭の値のみ使用します: {mapped_values[0]}"
                         )
                     params[f"customField_{field_id}"] = resolved_ids[0]
             else:
@@ -625,11 +624,10 @@ class IssueMapper:
                 # value_separator を指定していても分割は活きないため、
                 # 単一選択型と同様に捨てた値があることを警告する。
                 if len(mapped_values) > 1:
-                    print(
-                        f"  ⚠ カスタム属性「{field_name}」は選択肢型ではない（typeId={type_id}）ため"
+                    self._warn(
+                        f"カスタム属性「{field_name}」は選択肢型ではない（typeId={type_id}）ため"
                         f" value_separator による分割は無効です。先頭の値のみ使用します: "
-                        f"{mapped_values[0]}",
-                        file=sys.stderr,
+                        f"{mapped_values[0]}"
                     )
                 params[f"customField_{field_id}"] = mapped_values[0] if mapped_values else value
 
@@ -658,6 +656,8 @@ class IssueMapper:
             Backlog API の create_issue / update_issue に渡せるパラメータ dict
         """
         params: dict = {}
+        # この行の警告を集める（呼び出しごとにリセット）
+        self.warnings = []
 
         # required_cols チェック: 指定列のいずれかが空ならスキップ
         required_cols = self.cfg.get("required_cols") or []

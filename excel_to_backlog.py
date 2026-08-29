@@ -86,6 +86,8 @@ def new_counts() -> dict:
     unchanged     : 既存課題と内容が同一で変更が発生しなかった件数
                     （以前は skipped に混ぜていたが、「処理しなかった」行と
                      「処理したが変わらなかった」行は意味が異なるため分離した）
+    partial       : 作成・更新はできたが一部フィールドを設定できなかった件数
+                    （created / updated にも計上される）
     skipped       : 必須列が空・確認でキャンセル等で処理しなかった件数
     resumed       : --resume により前回処理済みとして飛ばした件数
     status_failed : 作成には成功したがステータス変更に失敗した件数
@@ -96,6 +98,7 @@ def new_counts() -> dict:
         "created": 0,
         "updated": 0,
         "unchanged": 0,
+        "partial": 0,
         "skipped": 0,
         "resumed": 0,
         "status_failed": 0,
@@ -799,6 +802,8 @@ def process_source(
         fmt_enriched = inject_meta(fmt_row, source_cfg) if fmt_row is not None else None
         try:
             params = mapper.map_row(enriched, formatted_row=fmt_enriched)
+            # map_row は次の呼び出しでリセットするため、この行の分を控える
+            row_warnings = list(mapper.warnings)
         except ValueError as e:
             print(f"  [{i}] ⚠ スキップ: {e}", file=sys.stderr)
             counts["skipped"] += 1
@@ -833,8 +838,11 @@ def process_source(
                     client.update_issue(existing_key, update_params)
                     print(f"  [{i}] ✅ 更新: {existing_key} — {params.get('summary', '')}")
                     counts["updated"] += 1
+                    if row_warnings:
+                        counts["partial"] += 1
                     log(row=i, action="updated", issue_key=existing_key,
-                        summary=params.get("summary", ""))
+                        summary=params.get("summary", ""),
+                        detail=" / ".join(row_warnings))
                 except BacklogNoChangeError as nce:
                     # 実際の Backlog エラーメッセージを表示して誤検出を確認できるようにする
                     print(f"  [{i}] — 変更なし: {existing_key} — {params.get('summary', '')}")
@@ -848,8 +856,10 @@ def process_source(
                     issue = create_issue_with_status(client, params)
                     print(f"  [{i}] ✅ 作成: {issue['issueKey']} — {issue['summary']}")
                     counts["created"] += 1
+                    if row_warnings:
+                        counts["partial"] += 1
                     log(row=i, action="created", issue_key=issue["issueKey"],
-                        summary=issue["summary"])
+                        summary=issue["summary"], detail=" / ".join(row_warnings))
                     if summary_index is not None:
                         summary_index.add(issue["summary"], issue["issueKey"])
                 except StatusUpdateFailed as e:
@@ -1105,6 +1115,9 @@ def print_summary(total: dict, *, dry_run: bool, interrupted: str = "",
     print(f"  更新: {total['updated']} 件")
     print(f"  変更なし: {total['unchanged']} 件")
     print(f"  スキップ: {total['skipped']} 件")
+    if total["partial"]:
+        print(f"  うち一部フィールド未設定: {total['partial']} 件")
+        print("    実行ログの detail 列に、どのフィールドが落ちたか記録しています。")
     if total["resumed"]:
         print(f"  再開スキップ: {total['resumed']} 件（前回処理済み）")
     print(f"  エラー: {total['error']} 件")
