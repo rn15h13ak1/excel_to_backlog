@@ -917,11 +917,17 @@ def process_source(
         # フィルタ後の連番ではシートの何行目か辿れず、失敗した行を特定できない。
         i = row.get(ExcelReader.ROW_NUMBER_KEY, "?")
 
-        # API を1度でも呼んだ行だけレート制限用の待機を入れる
-        # （確認プロンプトでキャンセルした行は通信していないため待つ意味がない）
-        api_called = upsert_enabled
+        # 例外処理で参照するため、計画の組み立て前に初期化しておく。
+        # plan_row() は照合のために API を呼ぶため、ここで失敗しうる。
+        params: dict = {}
+        row_warnings: list[str] = []
+
+        # 実際に通信した行だけレート制限用の待機を入れる
+        # （スキップ・再開スキップした行は通信していないため待つ意味がない）
+        api_called = False
         try:
             # ドライランと同じ関数で計画を組み立てる（照合は読み取りのみ）
+            api_called = upsert_enabled
             plan = plan_row(
                 row, source_cfg, mapper,
                 formatted_row=get_formatted_row(row),
@@ -936,6 +942,7 @@ def process_source(
                 print(f"  [{i}] ⚠ スキップ: {plan.reason}", file=sys.stderr)
                 counts["skipped"] += 1
                 log(row=i, action="skipped", detail=plan.reason)
+                api_called = False          # 照合前に確定するため通信していない
                 continue
 
             if plan.action == "resume":
@@ -944,6 +951,7 @@ def process_source(
                 # 再開スキップもログに残す。残さないと --resume を繰り返した
                 # ときにログが痩せ、次の再開で作成済みの行が再作成される。
                 log(row=i, action="resumed", summary=plan.summary)
+                api_called = False          # 照合より前に判定するため通信していない
                 continue
 
             if existing_key:
