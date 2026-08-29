@@ -669,13 +669,23 @@ def process_source(
     run_log: RunLog | None = None,
     completed: set[tuple[str, str]] | None = None,
     summary_index: SummaryIndex | None = None,
+    counts: dict | None = None,
 ) -> dict:
     """
     1つのソース（Excel ファイル）を処理して作成・更新件数を返す。
 
+    Parameters
+    ----------
+    counts : dict | None
+        集計を積む辞書。呼び出し元が渡した辞書をその場で更新するため、
+        途中で例外が送出されてもそこまでの集計が呼び出し元に残る。
+        以前は戻り値でのみ返しており、認証エラー等で中断すると
+        「3 件作成したのにサマリーは 0 件」と報告していた。
+        省略時は新しい辞書を作る。
+
     Returns
     -------
-    dict: new_counts() と同じキーを持つ集計結果
+    dict: new_counts() と同じキーを持つ集計結果（counts と同一オブジェクト）
     """
     name = source_cfg.get("name", "（名前なし）")
     excel_cfg = source_cfg.get("excel", {})
@@ -683,7 +693,8 @@ def process_source(
     upsert_cfg = source_cfg.get("upsert") or {}
     upsert_enabled = upsert_cfg.get("enabled", False)
 
-    counts = new_counts()
+    if counts is None:
+        counts = new_counts()
 
     print(f"\n{'='*55}")
     print(f"ソース: {name}")
@@ -735,6 +746,17 @@ def process_source(
 
     # ---- マッパー初期化 ----
     mapper = IssueMapper(mapping_cfg, master, headers=headers)
+
+    # 種別・優先度は全行に共通の設定のため、行ごとではなくここで一度だけ解決する。
+    # 以前は map_row() の中で解決していたため、設定のタイプミスが「500 行すべて
+    # スキップ」というデータ不備のような報告になり、原因が設定だと分からなかった。
+    try:
+        mapper.resolve_fixed_fields()
+    except ValueError as e:
+        print(f"\n  エラー: {e}", file=sys.stderr)
+        print("  → issue_mapping の設定を確認してください。", file=sys.stderr)
+        counts["error"] += 1
+        return counts
 
     # フィルタ後の行を plain_rows 全体のインデックスに対応付ける
     plain_row_ids = {id(r): idx for idx, r in enumerate(rows)} if formatted_rows_all else {}
@@ -1027,13 +1049,13 @@ def main():
         run_log = stack.enter_context(RunLog(log_path)) if log_path else None
         try:
             for source_cfg in sources_cfg:
-                counts = process_source(
+                # total を直接渡す。ソースの途中で中断しても、それまでの
+                # 集計が total に残りサマリーに反映される。
+                process_source(
                     source_cfg, client, master, dry_run=dry_run,
                     run_log=run_log, completed=completed,
-                    summary_index=summary_index,
+                    summary_index=summary_index, counts=total,
                 )
-                for k in total:
-                    total[k] += counts[k]
         except KeyboardInterrupt:
             interrupted = "ユーザーによる中断（Ctrl-C）"
         except BacklogAPIError as e:
@@ -1043,7 +1065,9 @@ def main():
                 total, dry_run=dry_run, interrupted=interrupted, log_path=log_path
             )
 
-    if interrupted:
+    # 中断だけでなく、1 件でも失敗があれば異常終了とする。
+    # 以前は全行が設定ミスで失敗しても終了コード 0 で終わっていた。
+    if interrupted or total["error"]:
         sys.exit(1)
 
 
