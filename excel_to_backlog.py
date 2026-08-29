@@ -36,6 +36,7 @@ import re
 import sys
 import time
 from contextlib import ExitStack
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -663,6 +664,94 @@ def confirm_run(sources_cfg: list, master: BacklogMaster, assume_yes: bool) -> N
 
 
 # ------------------------------------------------------------------
+# 行ごとの処理計画
+# ------------------------------------------------------------------
+
+@dataclass
+class RowPlan:
+    """
+    1 行をどう処理するかの決定。
+
+    ドライラン・実行の両方がこれを組み立てるため、ドライランの表示が
+    実行結果と食い違わない。以前はドライランが行ループの手前で return して
+    おり、upsert の照合を一切行わなかった。このツールで最も影響が大きい
+    「作成するのか更新するのか」を事前に確認できなかった。
+
+    action:
+        "create"  新規作成する
+        "update"  existing_key の課題を更新する
+        "skip"    処理しない（必須列が空・件名が空など）
+        "resume"  前回の実行で完了済みのため飛ばす
+    """
+
+    row_number: str                     # Excel シート上の行番号
+    action: str
+    params: dict = field(default_factory=dict)
+    existing_key: str | None = None
+    warnings: list[str] = field(default_factory=list)
+    reason: str = ""                    # skip の理由
+
+    @property
+    def summary(self) -> str:
+        return self.params.get("summary", "")
+
+
+def plan_row(
+    row: dict,
+    source_cfg: dict,
+    mapper: IssueMapper,
+    *,
+    formatted_row: dict | None = None,
+    client: BacklogClient | None = None,
+    master: BacklogMaster | None = None,
+    summary_index: SummaryIndex | None = None,
+    completed: set[tuple[str, str, str]] | None = None,
+) -> RowPlan:
+    """
+    1 行分の処理計画を組み立てる。Backlog への書き込みは行わない。
+
+    upsert が有効な場合は既存課題の照合（読み取りのみ）を行うため、
+    ドライランでも「作成か更新か」を確定できる。
+    """
+    name = source_cfg.get("name", "（名前なし）")
+    upsert_cfg = source_cfg.get("upsert") or {}
+    row_number = row.get(ExcelReader.ROW_NUMBER_KEY, "?")
+
+    enriched = inject_meta(row, source_cfg)
+    fmt_enriched = (
+        inject_meta(formatted_row, source_cfg) if formatted_row is not None else None
+    )
+
+    try:
+        params = mapper.map_row(enriched, formatted_row=fmt_enriched)
+    except ValueError as e:
+        return RowPlan(row_number=row_number, action="skip", reason=str(e))
+
+    # map_row は次の呼び出しでリセットするため、この行の分を控える
+    warnings = list(mapper.warnings)
+    summary = params.get("summary", "")
+
+    # --resume: 前回の実行で作成・更新まで完了した行は飛ばす
+    if completed is not None and completion_key(name, row_number, summary) in completed:
+        return RowPlan(row_number=row_number, action="resume", params=params,
+                       warnings=warnings)
+
+    existing_key = None
+    if upsert_cfg.get("enabled", False) and client is not None and master is not None:
+        existing_key = find_existing_issue(
+            client, upsert_cfg, enriched, params, master, summary_index=summary_index
+        )
+
+    return RowPlan(
+        row_number=row_number,
+        action="update" if existing_key else "create",
+        params=params,
+        existing_key=existing_key,
+        warnings=warnings,
+    )
+
+
+# ------------------------------------------------------------------
 # 1ソースの処理
 # ------------------------------------------------------------------
 
@@ -774,14 +863,38 @@ def process_source(
         return formatted_rows_all[orig_idx] if orig_idx is not None else None
 
     # ---- ドライラン ----
+    # 実行と同じ plan_row() を通すため、作成か更新かまで確認できる。
+    # upsert の照合は読み取りのみで Backlog を変更しない。
     if dry_run:
         print(f"\n  [DRY RUN] 以下の課題を作成/更新します:\n")
         for row in filtered_rows:
-            i = row.get(ExcelReader.ROW_NUMBER_KEY, "?")
-            fmt_row = get_formatted_row(row)
-            enriched = inject_meta(row, source_cfg)
-            fmt_enriched = inject_meta(fmt_row, source_cfg) if fmt_row is not None else None
-            print(mapper.format_dry_run(enriched, i, formatted_row=fmt_enriched))
+            plan = plan_row(
+                row, source_cfg, mapper,
+                formatted_row=get_formatted_row(row),
+                client=client, master=master,
+                summary_index=summary_index, completed=completed,
+            )
+            i = plan.row_number
+
+            if plan.action == "skip":
+                print(f"  [{i}] ⚠ スキップ: {plan.reason}", file=sys.stderr)
+                counts["skipped"] += 1
+                continue
+            if plan.action == "resume":
+                print(f"  [{i}] — 再開スキップ（前回処理済み）: {plan.summary}")
+                counts["resumed"] += 1
+                continue
+
+            if plan.action == "update":
+                print(f"  [{i}] 更新 → {plan.existing_key}")
+                counts["updated"] += 1
+            else:
+                print(f"  [{i}] 新規作成")
+                counts["created"] += 1
+            if plan.warnings:
+                counts["partial"] += 1
+
+            print(mapper.format_plan(plan))
         return counts
 
     # ---- 実処理 ----
@@ -797,39 +910,35 @@ def process_source(
         # 表示・ログ・再開判定には Excel シート上の行番号を使う。
         # フィルタ後の連番ではシートの何行目か辿れず、失敗した行を特定できない。
         i = row.get(ExcelReader.ROW_NUMBER_KEY, "?")
-        fmt_row = get_formatted_row(row)
-        enriched = inject_meta(row, source_cfg)
-        fmt_enriched = inject_meta(fmt_row, source_cfg) if fmt_row is not None else None
-        try:
-            params = mapper.map_row(enriched, formatted_row=fmt_enriched)
-            # map_row は次の呼び出しでリセットするため、この行の分を控える
-            row_warnings = list(mapper.warnings)
-        except ValueError as e:
-            print(f"  [{i}] ⚠ スキップ: {e}", file=sys.stderr)
-            counts["skipped"] += 1
-            log(row=i, action="skipped", detail=str(e))
-            continue
-
-        # --resume: 前回の実行で作成・更新まで完了した行は飛ばす
-        summary = params.get("summary", "")
-        if completed is not None and completion_key(name, i, summary) in completed:
-            print(f"  [{i}] — 再開スキップ（前回処理済み）: {summary}")
-            counts["resumed"] += 1
-            # 再開スキップもログに残す。残さないと --resume を繰り返したときに
-            # ログが痩せ、次の再開で作成済みの行が再作成される。
-            log(row=i, action="resumed", summary=summary)
-            continue
 
         # API を1度でも呼んだ行だけレート制限用の待機を入れる
         # （確認プロンプトでキャンセルした行は通信していないため待つ意味がない）
         api_called = upsert_enabled
         try:
-            existing_key = (
-                find_existing_issue(client, upsert_cfg, enriched, params, master,
-                                    summary_index=summary_index)
-                if upsert_enabled
-                else None
+            # ドライランと同じ関数で計画を組み立てる（照合は読み取りのみ）
+            plan = plan_row(
+                row, source_cfg, mapper,
+                formatted_row=get_formatted_row(row),
+                client=client, master=master,
+                summary_index=summary_index, completed=completed,
             )
+            params = plan.params
+            row_warnings = plan.warnings
+            existing_key = plan.existing_key
+
+            if plan.action == "skip":
+                print(f"  [{i}] ⚠ スキップ: {plan.reason}", file=sys.stderr)
+                counts["skipped"] += 1
+                log(row=i, action="skipped", detail=plan.reason)
+                continue
+
+            if plan.action == "resume":
+                print(f"  [{i}] — 再開スキップ（前回処理済み）: {plan.summary}")
+                counts["resumed"] += 1
+                # 再開スキップもログに残す。残さないと --resume を繰り返した
+                # ときにログが痩せ、次の再開で作成済みの行が再作成される。
+                log(row=i, action="resumed", summary=plan.summary)
+                continue
 
             if existing_key:
                 # projectId は更新時不要なので除去

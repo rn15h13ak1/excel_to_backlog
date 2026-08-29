@@ -734,6 +734,40 @@ class IssueMapper:
 
         return params
 
+    def format_plan(self, plan) -> str:
+        """
+        ドライラン用に RowPlan の内容を人間が読める形で返す。
+
+        format_preview() と同じ項目を出す。以前の format_dry_run() は
+        statusId と startDate を表示していなかったため、プレビューとドライランで
+        見える情報が食い違っていた。
+        """
+        params = plan.params
+        lines = [f"         件名: {params.get('summary', '（なし）')}"]
+
+        if "description" in params:
+            desc_lines = params["description"].splitlines()
+            for dl in desc_lines[:3]:
+                lines.append(f"         {dl}")
+            if len(desc_lines) > 3:
+                lines.append("         ...")
+
+        for key, label in (
+            ("startDate", "開始日"), ("dueDate", "期限日"),
+            ("assigneeId", "担当者ID"), ("statusId", "ステータスID"),
+        ):
+            if key in params:
+                lines.append(f"         {label}: {params[key]}")
+
+        for k, v in params.items():
+            if k.startswith("customField_"):
+                lines.append(f"         {k}: {v}")
+
+        for warning in plan.warnings:
+            lines.append(f"         ⚠ {warning}")
+
+        return "\n".join(lines)
+
     def format_dry_run(
         self,
         row: dict[str, str],
