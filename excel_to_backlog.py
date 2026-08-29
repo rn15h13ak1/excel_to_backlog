@@ -269,11 +269,17 @@ def collect_referenced_columns(source_cfg: dict) -> list[tuple[str, str]]:
             refs.append((path, col))
 
     # ---- フィルター ----
-    for i, cond in enumerate(source_cfg.get("filters") or []):
-        add(f"filters[{i}].col_name", cond.get("col_name"))
-    for gi, group in enumerate(source_cfg.get("filter_groups") or []):
-        for i, cond in enumerate(group.get("filters") or []):
-            add(f"filter_groups[{gi}].filters[{i}].col_name", cond.get("col_name"))
+    # apply_filters() は filter_groups があれば filters を無視するため、
+    # 検証も同じ優先順位に合わせる。移行途中で古い filters が残っていても
+    # 実行時に読まれない設定でソースを止めない。
+    filter_groups_cfg = source_cfg.get("filter_groups") or []
+    if filter_groups_cfg:
+        for gi, group in enumerate(filter_groups_cfg):
+            for i, cond in enumerate(group.get("filters") or []):
+                add(f"filter_groups[{gi}].filters[{i}].col_name", cond.get("col_name"))
+    else:
+        for i, cond in enumerate(source_cfg.get("filters") or []):
+            add(f"filters[{i}].col_name", cond.get("col_name"))
 
     # ---- 件名 ----
     summary_template = mapping_cfg.get("summary_template", "")
@@ -284,14 +290,24 @@ def collect_referenced_columns(source_cfg: dict) -> list[tuple[str, str]]:
 
     # ---- 本文 ----
     # description_template は template モードでのみ使われる
-    if mapping_cfg.get("description_format", "template") != "auto":
-        add_template(
-            "issue_mapping.description_template",
-            mapping_cfg.get("description_template", ""),
-        )
-    # description_cols は auto モードと {{auto}} の両方で使われるため常に検証する
-    for i, col in enumerate(mapping_cfg.get("description_cols") or []):
-        add(f"issue_mapping.description_cols[{i}]", col)
+    is_auto = mapping_cfg.get("description_format", "template") == "auto"
+    description_template = mapping_cfg.get("description_template", "")
+    if not is_auto:
+        add_template("issue_mapping.description_template", description_template)
+
+    # description_cols を読むのは _render_auto() だけで、それが動くのは
+    # auto モードか、テンプレートに {{auto}} がある場合に限られる。
+    # どちらでもないときに検証すると、使われない設定でソースを止めてしまう。
+    # _render_template() はプレースホルダー名を strip して判定するため、
+    # {{ auto }} のような書き方も同じように扱う。
+    placeholders = {
+        name.strip()
+        for name in IssueMapper.TEMPLATE_PLACEHOLDER_RE.findall(description_template)
+    }
+    uses_auto_body = is_auto or "auto" in placeholders
+    if uses_auto_body:
+        for i, col in enumerate(mapping_cfg.get("description_cols") or []):
+            add(f"issue_mapping.description_cols[{i}]", col)
 
     # ---- 日付（列名またはテンプレート）----
     for key in ("due_date_col", "start_date_col"):
@@ -306,7 +322,12 @@ def collect_referenced_columns(source_cfg: dict) -> list[tuple[str, str]]:
     # ---- その他の単一列 ----
     add("issue_mapping.assignee_col", mapping_cfg.get("assignee_col"))
     add("issue_mapping.status_col", mapping_cfg.get("status_col"))
-    add("upsert.key_col", upsert_cfg.get("key_col"))
+
+    # key_col を読む find_existing_issue() は upsert 有効時しか呼ばれない。
+    # 書き戻し列をこれから用意する段階で設定だけ先に書いておけるよう、
+    # 無効時は検証しない。
+    if upsert_cfg.get("enabled", False):
+        add("upsert.key_col", upsert_cfg.get("key_col"))
 
     # ---- 必須列・カスタム属性 ----
     for i, col in enumerate(mapping_cfg.get("required_cols") or []):

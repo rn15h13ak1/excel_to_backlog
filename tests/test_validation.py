@@ -146,3 +146,75 @@ class TestProcessSourceAborts:
         expected = new_counts()
         expected["error"] = 1
         assert counts == expected
+
+
+class TestNotValidatedWhenUnused:
+    """
+    実行時に読まれない設定項目は検証しない。
+    「設定に書かれているか」ではなく「実際に読まれるか」で判断する。
+    """
+
+    def test_filter_groups_があれば_filters_は検証しない(self):
+        """apply_filters() は filter_groups を優先し filters を無視する。"""
+        cfg = {
+            "filters": [{"col_name": "廃止した列", "value": "x"}],
+            "filter_groups": [{"filters": [{"col_name": "項番", "value": "1"}]}],
+            "issue_mapping": {"summary_col": "件名"},
+        }
+        assert validate_column_references(cfg, HEADERS) == []
+
+    def test_filter_groups_がなければ_filters_を検証する(self):
+        cfg = {
+            "filters": [{"col_name": "無い列", "value": "x"}],
+            "issue_mapping": {"summary_col": "件名"},
+        }
+        assert validate_column_references(cfg, HEADERS)
+
+    def test_upsert_無効なら_key_col_は検証しない(self):
+        """書き戻し列を用意する前に設定だけ書いておける。"""
+        cfg = {
+            "issue_mapping": {"summary_col": "件名"},
+            "upsert": {"enabled": False, "key_col": "Backlog番号"},
+        }
+        assert validate_column_references(cfg, HEADERS) == []
+
+    def test_upsert_有効なら_key_col_を検証する(self):
+        cfg = {
+            "issue_mapping": {"summary_col": "件名"},
+            "upsert": {"enabled": True, "key_col": "Backlog番号"},
+        }
+        assert validate_column_references(cfg, HEADERS)
+
+    def test_auto_を使わない_template_では_description_cols_を検証しない(self):
+        """_render_auto() が動かないため description_cols は読まれない。"""
+        cfg = {"issue_mapping": {
+            "summary_col": "件名",
+            "description_format": "template",
+            "description_template": "{{件名}}",
+            "description_cols": ["廃止した列"],
+        }}
+        assert validate_column_references(cfg, HEADERS) == []
+
+    def test_auto_モードなら_description_cols_を検証する(self):
+        cfg = {"issue_mapping": {
+            "summary_col": "件名",
+            "description_format": "auto",
+            "description_cols": ["無い列"],
+        }}
+        assert validate_column_references(cfg, HEADERS)
+
+    def test_テンプレートに_auto_があれば_description_cols_を検証する(self):
+        cfg = {"issue_mapping": {
+            "summary_col": "件名",
+            "description_template": "見出し\n{{auto}}",
+            "description_cols": ["無い列"],
+        }}
+        assert validate_column_references(cfg, HEADERS)
+
+    def test_空白付きの_auto_も認識する(self):
+        cfg = {"issue_mapping": {
+            "summary_col": "件名",
+            "description_template": "{{ auto }}",
+            "description_cols": ["無い列"],
+        }}
+        assert validate_column_references(cfg, HEADERS)
