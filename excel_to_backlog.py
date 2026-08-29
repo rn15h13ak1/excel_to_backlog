@@ -971,8 +971,11 @@ def process_source(
                     print(f"  [{i}] — 変更なし: {existing_key} — {params.get('summary', '')}")
                     print(f"    Backlog message: {nce}", file=sys.stderr)
                     counts["unchanged"] += 1
+                    if row_warnings:
+                        counts["partial"] += 1
                     log(row=i, action="unchanged", issue_key=existing_key,
-                        summary=params.get("summary", ""), detail=str(nce))
+                        summary=params.get("summary", ""),
+                        detail=" / ".join([str(nce), *row_warnings]))
             else:
                 try:
                     api_called = True
@@ -998,9 +1001,11 @@ def process_source(
                     counts["status_failed"] += 1
                     if summary_index is not None:
                         summary_index.add(issue["summary"], issue["issueKey"])
+                    if row_warnings:
+                        counts["partial"] += 1
                     log(row=i, action="created_status_failed",
                         issue_key=issue["issueKey"], summary=issue["summary"],
-                        detail=str(e.cause))
+                        detail=" / ".join([str(e.cause), *row_warnings]))
 
         except BacklogAPIError as e:
             print(f"  [{i}] ❌ 失敗: {params.get('summary', '')}", file=sys.stderr)

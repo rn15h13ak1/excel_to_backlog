@@ -125,3 +125,55 @@ class TestPartialCount:
         etb.print_summary(total, dry_run=False)
 
         assert "一部フィールド未設定" not in capsys.readouterr().out
+
+
+class TestWarningsOnAllOutcomes:
+    """
+    警告は created / updated だけでなく、変更なし・ステータス変更失敗の行にも
+    付く。特定の結果でだけ落ちると「detail 列に記録しています」という案内が
+    嘘になり、ドライランと実行の partial 件数もずれる。
+    """
+
+    def _cfg(self, source_cfg, **extra):
+        return source_cfg(
+            ["件名", "期限"], [["既存課題", "R7/1/20"]],
+            issue_mapping={"due_date_col": "期限"}, **extra,
+        )
+
+    def test_変更なしの行にも警告が残る(self, source_cfg, master, tmp_path):
+        from summary_index import SummaryIndex
+
+        cfg = self._cfg(source_cfg, upsert={"enabled": True, "match_summary": True})
+        backlog = FakeBacklog({"DEMO-1": "既存課題"}, no_change_on_update=True)
+        log_path = tmp_path / "run.csv"
+
+        with RunLog(log_path) as log:
+            counts = etb.process_source(
+                cfg, backlog, master, dry_run=False, run_log=log,
+                summary_index=SummaryIndex(backlog, master.project_id),
+            )
+
+        assert counts["unchanged"] == 1
+        assert counts["partial"] == 1
+        assert "R7/1/20" in details(log_path)["2"]
+
+    def test_ステータス変更に失敗した行にも警告が残る(self, source_cfg, master, tmp_path):
+        cfg = source_cfg(
+            ["件名", "期限", "状態"], [["課題A", "R7/1/20", "完了"]],
+            issue_mapping={"due_date_col": "期限", "status_col": "状態",
+                           "status_map": {"完了": "完了"}},
+        )
+        backlog = FakeBacklog(fail_status_update=True)
+        log_path = tmp_path / "run.csv"
+
+        with RunLog(log_path) as log:
+            counts = etb.process_source(
+                cfg, backlog, master, dry_run=False, run_log=log
+            )
+
+        assert counts["created"] == 1
+        assert counts["status_failed"] == 1
+        assert counts["partial"] == 1
+        detail = details(log_path)["2"]
+        assert "ステータス" in detail          # 失敗の理由
+        assert "R7/1/20" in detail             # 落ちたフィールド
