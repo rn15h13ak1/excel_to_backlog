@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pytest-cov>=4.0"]
 
 # モジュールがリポジトリ直下に並ぶ構成（flat-layout）のため、
 # setuptools の自動検出では「トップレベルモジュールが複数ある」と判断されて
@@ -30,6 +30,7 @@ py-modules = [
     "backlog_client",
     "run_log",
     "summary_index",
+    "config_validation",
 ]
 
 [tool.pytest.ini_options]

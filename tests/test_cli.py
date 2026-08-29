@@ -311,3 +311,20 @@ class TestExitCode:
         out = capsys.readouterr().out
         assert "処理中断" in out
         assert "作成: 1 件" in out          # 以前は「作成: 0 件」だった
+
+
+class TestConfigKeyValidation:
+    def test_キーの綴り間違いで停止する(self, workspace, backlog, capsys):
+        workspace.write(sources=[{
+            "name": "タスク管理表",
+            "excel": {"path": "dummy.xlsx"},
+            "issue_mapping": {"issue_type": "タスク", "sumary_col": "件名"},
+        }])
+
+        code = main_with("--config", str(workspace.config), "--execute", "--yes")
+
+        assert code == 1
+        assert backlog.create_calls == 0
+        err = capsys.readouterr().err
+        assert "sumary_col" in err
+        assert "summary_col" in err          # 正しい名前を提案する

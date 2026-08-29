@@ -43,6 +43,7 @@ from pathlib import Path
 import yaml
 
 from backlog_client import BacklogAPIError, BacklogClient, BacklogNoChangeError
+from config_validation import validate_config_keys
 from excel_reader import ExcelReader
 from mapper import BacklogMaster, IssueMapper
 from run_log import RunLog, completion_key, default_log_path, load_completed
@@ -1077,6 +1078,15 @@ def main():
     sources_cfg = config.get("sources") or []
 
     validate_backlog_config(backlog_cfg)
+
+    # 設定キーの綴り間違いは dict.get() の既定値で静かに無視され、
+    # 意図と違う動作になる。読み込み直後に検出する。
+    key_problems = validate_config_keys(config)
+    if key_problems:
+        print("エラー: 設定ファイルに問題があります:", file=sys.stderr)
+        for line in key_problems:
+            print(line, file=sys.stderr)
+        sys.exit(1)
 
     if not sources_cfg:
         print("エラー: config.yaml に sources が設定されていません。", file=sys.stderr)
