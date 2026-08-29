@@ -20,10 +20,27 @@ from config_validation import (
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-README = (ROOT / "README.md").read_text(encoding="utf-8")
-SAMPLE = (ROOT / "config.sample.yaml").read_text(encoding="utf-8")
-MINIMAL = (ROOT / "config.minimal.yaml").read_text(encoding="utf-8")
-CLI_SRC = (ROOT / "excel_to_backlog.py").read_text(encoding="utf-8")
+
+# 変異テスト（mutmut）は mutants/ 配下にソースだけを複製して実行するため、
+# README や config.sample.yaml が存在しない。文書との整合はコードの変異とは
+# 無関係なので、その環境ではまとめてスキップする。
+# 読み込み自体も収集時に走るため、存在確認をしてから読む。
+HAS_DOCS = (ROOT / "README.md").exists()
+
+pytestmark = pytest.mark.skipif(
+    not HAS_DOCS,
+    reason="README を参照できない環境（変異テスト等）ではスキップ",
+)
+
+
+def _read(name: str) -> str:
+    return (ROOT / name).read_text(encoding="utf-8") if HAS_DOCS else ""
+
+
+README = _read("README.md")
+SAMPLE = _read("config.sample.yaml")
+MINIMAL = _read("config.minimal.yaml")
+CLI_SRC = _read("excel_to_backlog.py")
 
 ALL_KEYS = (
     BACKLOG_KEYS | EXCEL_KEYS | ISSUE_MAPPING_KEYS

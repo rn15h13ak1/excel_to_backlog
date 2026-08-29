@@ -1,0 +1,49 @@
+name: mutation
+
+# 変異テストは意図的にコードを壊し、テストが落ちるかを確認する。
+# カバレッジが「テストが触れていない場所」を示すのに対し、変異テストは
+# 「触れているが検証できていない場所」を示す。
+#
+# 4,000 個以上の変異体を1つずつ試すため 5 分以上かかる。push のたびに
+# 走らせると開発の妨げになるので、週次と手動実行に限定する。
+on:
+  schedule:
+    - cron: "0 20 * * 0"     # 毎週月曜 05:00 JST
+  workflow_dispatch:
+
+jobs:
+  mutmut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 依存関係をインストール
+        run: pip install -e ".[dev]" mutmut
+
+      - name: 変異テストを実行
+        # 生存した変異体があっても失敗させない。
+        # 変異体には文字列の書き換えなど意味のないものが多く含まれるため、
+        # 数値そのものではなく「何が生き残ったか」を人が見て判断する。
+        run: mutmut run || true
+
+      - name: 生存した変異体を一覧表示
+        run: |
+          echo "## 生存した変異体" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          mutmut results >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 結果を保存する
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutmut-results
+          path: .mutmut-cache
+          if-no-files-found: ignore

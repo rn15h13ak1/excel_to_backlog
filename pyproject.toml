@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-cov>=4.0"]
+dev = ["pytest>=8.0", "pytest-cov>=4.0", "mutmut>=3.0"]
 
 # モジュールがリポジトリ直下に並ぶ構成（flat-layout）のため、
 # setuptools の自動検出では「トップレベルモジュールが複数ある」と判断されて
@@ -44,3 +44,20 @@ omit = ["tests/*"]
 # try の範囲を変えるような構造的な変更は行数を変えないため、
 # 行カバレッジでは検出できない経路が残る。
 branch = true
+
+# 変異テスト。意図的にコードを壊してテストが落ちるかを確認する。
+# カバレッジが「テストが触れていない場所」を示すのに対し、変異テストは
+# 「触れているが検証できていない場所」を示す。
+#
+# 全モジュールを列挙するのは、mutmut が source_paths のみを mutants/ へ
+# 複製するため。一部だけ指定すると他モジュールを import できず起動に失敗する。
+[tool.mutmut]
+source_paths = [
+    "excel_to_backlog.py",
+    "mapper.py",
+    "excel_reader.py",
+    "backlog_client.py",
+    "run_log.py",
+    "summary_index.py",
+    "config_validation.py",
+]

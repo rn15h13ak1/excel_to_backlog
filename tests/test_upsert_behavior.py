@@ -202,3 +202,60 @@ class TestBothConfigured:
 
         assert counts["updated"] == 1
         assert backlog.updates[0][0] == "DEMO-1"
+
+
+class TestMatchSummaryDisabled:
+    """
+    match_summary を明示的に切った場合に件名照合が走らないこと。
+    変異テストで、条件の and を or に変えても検出されないことが分かった
+    （＝設定が無視されても気づけない状態だった）。
+    """
+
+    def test_match_summary_が_false_なら照合しない(self, master):
+        backlog = FakeBacklog({"DEMO-1": OLD})
+        index = SummaryIndex(backlog, master.project_id)
+
+        got = etb.find_existing_issue(
+            backlog, {"enabled": True, "match_summary": False},
+            {}, {"summary": OLD}, master, summary_index=index,
+        )
+
+        assert got is None
+        assert backlog.get_issues_calls == 0      # 索引を構築すらしない
+
+    def test_match_summary_が未指定なら照合しない(self, master):
+        backlog = FakeBacklog({"DEMO-1": OLD})
+
+        got = etb.find_existing_issue(
+            backlog, {"enabled": True}, {}, {"summary": OLD}, master,
+            summary_index=SummaryIndex(backlog, master.project_id),
+        )
+
+        assert got is None
+
+    def test_索引が渡されなければ照合しない(self, master):
+        """summary_index が None のときに例外にならないこと。"""
+        got = etb.find_existing_issue(
+            FakeBacklog(), {"enabled": True, "match_summary": True},
+            {}, {"summary": OLD}, master, summary_index=None,
+        )
+        assert got is None
+
+    def test_key_col_の値が空白だけなら新規作成扱い(self, master):
+        """row.get(key_col, "").strip() の既定値と strip の両方を守る。"""
+        backlog = FakeBacklog({"DEMO-1": OLD})
+
+        got = etb.find_existing_issue(
+            backlog, {"enabled": True, "key_col": "番号"},
+            {"番号": "   "}, {"summary": OLD}, master,
+        )
+
+        assert got is None
+
+    def test_key_col_の列が存在しなくても落ちない(self, master):
+        """row.get(key_col, "") の既定値が None になると strip で落ちる。"""
+        got = etb.find_existing_issue(
+            FakeBacklog(), {"enabled": True, "key_col": "無い列"},
+            {}, {"summary": OLD}, master,
+        )
+        assert got is None
