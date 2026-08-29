@@ -328,3 +328,86 @@ class TestConfigKeyValidation:
         err = capsys.readouterr().err
         assert "sumary_col" in err
         assert "summary_col" in err          # 正しい名前を提案する
+
+
+class TestInspectionModes:
+    """--list-master / --show-columns / --limit を CLI 経由で通す。"""
+
+    def test_list_master_で名前一覧を表示して終了する(self, workspace, backlog, capsys):
+        assert main_with("--config", str(workspace.config), "--list-master") == 0
+
+        out = capsys.readouterr().out
+        assert "設定に使える名前の一覧" in out
+        assert "タスク" in out
+        assert backlog.create_calls == 0
+
+    def test_list_master_は_sources_が無くても動く(self, workspace, backlog, capsys):
+        """設定を書く前に使うため。"""
+        workspace.write(sources=[])
+
+        assert main_with("--config", str(workspace.config), "--list-master") == 0
+        assert "設定に使える名前の一覧" in capsys.readouterr().out
+
+    def test_show_columns_で列名を表示して終了する(self, workspace, backlog, capsys):
+        assert main_with("--config", str(workspace.config), "--show-columns") == 0
+
+        out = capsys.readouterr().out
+        assert "A: 件名" in out
+        assert "B: Backlog番号" in out
+
+    def test_show_columns_は_Backlog_へ接続しない(self, workspace, monkeypatch):
+        """設定を書いている途中で使うため、接続情報が未確定でも動く。"""
+        def no_client(*a, **kw):
+            raise AssertionError("BacklogClient を生成してはいけない")
+
+        monkeypatch.setattr(etb, "BacklogClient", no_client)
+        assert main_with("--config", str(workspace.config), "--show-columns") == 0
+
+    def test_show_columns_は読み込み失敗で終了コード_1(self, workspace, capsys):
+        workspace.write(sources=[{
+            "name": "壊れたソース",
+            "excel": {"path": "/存在しない/path.xlsx"},
+            "issue_mapping": {"issue_type": "タスク", "priority": "中", "summary_col": "件名"},
+        }])
+
+        assert main_with("--config", str(workspace.config), "--show-columns") == 1
+        assert "読み込みに失敗" in capsys.readouterr().err
+
+    def test_limit_で処理行数を絞れる(self, workspace, backlog):
+        main_with("--config", str(workspace.config), "--execute", "--yes", "--limit", "1")
+        assert backlog.create_calls == 1
+
+    def test_limit_は_1_以上(self, workspace, backlog):
+        assert main_with("--config", str(workspace.config), "--limit", "0") == 2
+
+    def test_確認画面に件数が出る(self, workspace, backlog, monkeypatch, capsys):
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+
+        main_with("--config", str(workspace.config), "--execute")
+
+        assert "作成予定: 2 件 / 更新予定: 0 件" in capsys.readouterr().out
+
+    def test_事前算出が失敗しても本処理は試みる(self, workspace, monkeypatch, capsys):
+        """算出時のエラーで実行機会を失わないこと。"""
+        instance = FakeBacklog()
+        calls = {"n": 0}
+        original = instance.get_issues
+
+        def fail_first(project_id, params=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise BacklogAPIError("一時的な失敗", status=500)
+            return original(project_id, params)
+
+        monkeypatch.setattr(instance, "get_issues", fail_first)
+        monkeypatch.setattr(etb, "BacklogClient", lambda *a, **kw: instance)
+        workspace.write(sources=[{
+            "name": "タスク管理表",
+            "excel": {"path": str(workspace.dir.glob("*.xlsx").__next__())},
+            "issue_mapping": {"issue_type": "タスク", "priority": "中", "summary_col": "件名"},
+            "upsert": {"enabled": True, "match_summary": True},
+        }])
+
+        main_with("--config", str(workspace.config), "--execute", "--yes")
+
+        assert instance.create_calls > 0

@@ -153,3 +153,74 @@ class TestLimit:
         cfg = source_cfg(["件名"], [["A"], ["B"], ["C"]])
         counts = etb.process_source(cfg, FakeBacklog(), master, dry_run=False)
         assert counts["created"] == 3
+
+
+class TestSummaryDisplay:
+    """print_summary の未到達だった分岐。"""
+
+    def test_ドライランでスキップとエラーが出る(self, capsys):
+        total = etb.new_counts()
+        total.update(created=1, skipped=2, error=1)
+
+        etb.print_summary(total, dry_run=True)
+
+        out = capsys.readouterr().out
+        assert "スキップ: 2 件" in out
+        assert "エラー: 1 件" in out
+
+    def test_実行ログのパスと再開コマンドが出る(self, tmp_path, capsys):
+        total = etb.new_counts()
+        total.update(created=1, error=1)
+
+        etb.print_summary(total, dry_run=False, log_path=tmp_path / "run_20260101.csv")
+
+        out = capsys.readouterr().out
+        assert "実行ログ:" in out
+        assert "--resume run_20260101.csv" in out
+
+    def test_エラーが無ければ再開コマンドは出さない(self, tmp_path, capsys):
+        total = etb.new_counts()
+        total["created"] = 1
+
+        etb.print_summary(total, dry_run=False, log_path=tmp_path / "run.csv")
+
+        out = capsys.readouterr().out
+        assert "実行ログ:" in out
+        assert "--resume" not in out
+
+
+class TestConfirmRunDisplay:
+    def test_件数が表示される(self, capsys):
+        planned = etb.new_counts()
+        planned.update(created=5, updated=2, unchanged=1, skipped=3)
+
+        etb.confirm_run([{"name": "S"}], None, assume_yes=True, planned=planned)
+
+        out = capsys.readouterr().out
+        assert "作成予定: 5 件 / 更新予定: 2 件" in out
+        assert "変更なし: 1 件" in out
+        assert "スキップ: 3 件" in out
+
+    def test_算出できなかった場合は件数を出さない(self, capsys):
+        etb.confirm_run([{"name": "S"}], None, assume_yes=True, planned=None)
+
+        out = capsys.readouterr().out
+        assert "作成予定" not in out
+        assert "対象ソース: S" in out
+
+    def test_該当のない項目は出さない(self, capsys):
+        planned = etb.new_counts()
+        planned["created"] = 1
+
+        etb.confirm_run([{"name": "S"}], None, assume_yes=True, planned=planned)
+
+        out = capsys.readouterr().out
+        assert "変更なし" not in out
+        assert "再開スキップ" not in out
+
+
+class TestListMasterFallbacks:
+    def test_取得できなかった項目はその旨を出す(self, capsys):
+        from mapper import BacklogMaster
+        etb.print_master_data(BacklogMaster(project_id=1))
+        assert "取得できませんでした" in capsys.readouterr().out
