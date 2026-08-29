@@ -174,3 +174,40 @@ class TestDuplicateSummaryInSheet:
 
         assert dry["created"] == 1
         assert dry["updated"] == 2
+
+
+class TestDryRunSummary:
+    """
+    ドライランは作成/更新の内訳まで算出している。表示しなければ
+    RowPlan を導入した意味がない。
+    """
+
+    def test_作成予定と更新予定が表示される(self, capsys):
+        total = etb.new_counts()
+        total.update(created=3, updated=2)
+
+        etb.print_summary(total, dry_run=True)
+
+        out = capsys.readouterr().out
+        assert "作成予定: 3 件" in out
+        assert "更新予定: 2 件" in out
+
+    def test_一部未設定と再開スキップも表示される(self, capsys):
+        total = etb.new_counts()
+        total.update(created=1, partial=1, resumed=2)
+
+        etb.print_summary(total, dry_run=True)
+
+        out = capsys.readouterr().out
+        assert "一部フィールド未設定: 1 件" in out
+        assert "再開スキップ: 2 件" in out
+
+    def test_該当がなければ余計な行を出さない(self, capsys):
+        total = etb.new_counts()
+        total["created"] = 1
+
+        etb.print_summary(total, dry_run=True)
+
+        out = capsys.readouterr().out
+        assert "一部フィールド未設定" not in out
+        assert "再開スキップ" not in out

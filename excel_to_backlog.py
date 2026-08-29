@@ -1240,9 +1240,17 @@ def print_summary(total: dict, *, dry_run: bool, interrupted: str = "",
         print()
 
     if dry_run:
+        # ドライランは実行と同じ計画を組み立てているため、作成/更新の内訳まで
+        # 予測できる。算出しているのに表示しないと RowPlan を入れた意味がない。
         print("（DRY RUN のため実際の登録は行っていません）")
+        print(f"  作成予定: {total['created']} 件")
+        print(f"  更新予定: {total['updated']} 件")
+        if total["resumed"]:
+            print(f"  再開スキップ: {total['resumed']} 件（前回処理済み）")
         if total["skipped"]:
             print(f"  スキップ: {total['skipped']} 件")
+        if total["partial"]:
+            print(f"  うち一部フィールド未設定: {total['partial']} 件")
         if total["error"]:
             print(f"  エラー: {total['error']} 件  ← 読み込み・設定に問題があります")
         print("  実際に登録するには --execute を付けて再実行してください。")
