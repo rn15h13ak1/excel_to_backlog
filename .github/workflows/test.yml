@@ -30,4 +30,6 @@ jobs:
         run: pip install -e ".[dev]" pytest-cov
 
       - name: テストを実行
-        run: pytest -q --cov=. --cov-report=term-missing
+        # branch = true は pyproject.toml で指定済み。
+        # 下限を下回ったら失敗させ、カバレッジの後退に気づけるようにする。
+        run: pytest -q --cov=. --cov-report=term-missing --cov-fail-under=95
