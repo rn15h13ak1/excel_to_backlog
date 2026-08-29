@@ -92,11 +92,21 @@ python excel_to_backlog.py
 python excel_to_backlog.py --preview
 ```
 
-**7. 実際に登録・更新する**
+**7. まず数件だけ登録して確認する**
+
+いきなり全件登録せず、先頭の数行だけ実際に作成して Backlog 上で確認できます。
+
+```bash
+python excel_to_backlog.py --execute --limit 3
+```
+
+**8. 残りをすべて登録・更新する**
 
 ```bash
 python excel_to_backlog.py --execute
 ```
+
+> `upsert` を有効にしていれば、`--limit` で作成済みの行は次の実行で更新扱いになります。無効の場合は `--resume` で実行ログを渡すと重複を避けられます。
 
 ---
 
@@ -115,6 +125,7 @@ python excel_to_backlog.py [オプション]
 | `--config path` | 設定ファイルのパスを指定する（デフォルト: スクリプトと同じディレクトリの `config.yaml`） |
 | `--list-master` | 設定に使える名前（種別・優先度・ステータス・担当者・カスタム属性）を一覧表示する |
 | `--show-columns` | Excel から読み取れる列名を一覧表示する（Backlog へは接続しない） |
+| `--limit N` | 各ソースで処理する行数を先頭 N 行に制限する（初回に少数だけ試す用） |
 | `-y` / `--yes` | 実行前の確認を省略する（非対話環境ではこの指定が必要） |
 | `--resume CSV` | 過去の実行ログを読み、作成・更新済みの行を飛ばして再開する |
 | `--no-log` | 実行ログ（`run_*.csv`）を出力しない |

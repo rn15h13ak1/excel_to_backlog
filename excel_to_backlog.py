@@ -881,12 +881,16 @@ def process_source(
     completed: set[tuple[str, str, str]] | None = None,
     summary_index: SummaryIndex | None = None,
     counts: dict | None = None,
+    limit: int | None = None,
 ) -> dict:
     """
     1つのソース（Excel ファイル）を処理して作成・更新件数を返す。
 
     Parameters
     ----------
+    limit : int | None
+        処理する行数の上限。初回に少数だけ試すために使う。
+        フィルター適用後の先頭から数える。
     counts : dict | None
         集計を積む辞書。呼び出し元が渡した辞書をその場で更新するため、
         途中で例外が送出されてもそこまでの集計が呼び出し元に残る。
@@ -950,6 +954,11 @@ def process_source(
     # フィルタリング（filters / filter_groups 共通処理）
     filtered_rows = apply_filters(rows, source_cfg, headers)
     print(f"  対象行数: {len(filtered_rows)} 行（フィルター後）")
+
+    if limit is not None and len(filtered_rows) > limit:
+        print(f"  → --limit {limit} のため先頭 {limit} 行のみ処理します"
+              f"（残り {len(filtered_rows) - limit} 行は対象外）")
+        filtered_rows = filtered_rows[:limit]
 
     if not filtered_rows:
         print("  → 対象行がないためスキップします。")
@@ -1180,6 +1189,12 @@ def main():
         help="実際に Backlog へ課題を作成/更新する（省略時はドライラン）",
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        metavar="N",
+        help="各ソースで処理する行数を先頭 N 行に制限する（初回に少数だけ試す用）",
+    )
+    parser.add_argument(
         "--show-columns",
         action="store_true",
         help="Excel から読み取れる列名を一覧表示する（Backlog へは接続しない）",
@@ -1212,6 +1227,9 @@ def main():
     args = parser.parse_args()
     # デフォルトはドライラン。--execute が指定された場合のみ実処理を行う。
     dry_run = not args.execute
+
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit は 1 以上を指定してください。")
 
     if args.preview and args.execute:
         parser.error("--preview と --execute は同時に指定できません。")
@@ -1350,6 +1368,7 @@ def main():
                     source_cfg, client, master, dry_run=dry_run,
                     run_log=run_log, completed=completed,
                     summary_index=summary_index, counts=total,
+                    limit=args.limit,
                 )
         except KeyboardInterrupt:
             interrupted = "ユーザーによる中断（Ctrl-C）"
