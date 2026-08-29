@@ -39,6 +39,35 @@ ALLOWED_VALUES = {
 }
 
 
+def _as_dict(value, path: str, problems: list[str]) -> dict:
+    """
+    dict であることを確かめて返す。違えば説明を積んで空 dict を返す。
+
+    YAML の書き間違い（項目が空・リストとして書いた等）でも、
+    トレースバックではなく設定の問題として説明する。
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        problems.append(
+            f"    {path} は設定のまとまり（キー: 値）で書いてください"
+            f"（現在: {type(value).__name__}）"
+        )
+        return {}
+    return value
+
+
+def _as_list(value, path: str, problems: list[str]) -> list:
+    """list であることを確かめて返す。違えば説明を積んで空リストを返す。"""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        problems.append(f"    {path} は一覧（- で並べる形）で書いてください"
+                        f"（現在: {type(value).__name__}）")
+        return []
+    return value
+
+
 def _check_keys(cfg: dict, allowed: set[str], path: str) -> list[str]:
     """未知のキーを見つけて説明行のリストを返す。"""
     if not isinstance(cfg, dict):
@@ -53,18 +82,38 @@ def _check_keys(cfg: dict, allowed: set[str], path: str) -> list[str]:
 
 
 def _closest(key: str, candidates: set[str]) -> str | None:
-    """よくある綴り間違いを見つける（1文字違い・大文字小文字違い）。"""
+    """
+    よくある綴り間違いに対して、近い候補を1つ返す。
+
+    set をそのまま走査すると、複数が該当したときに選ばれる候補が
+    実行ごとに変わってしまう（文字列ハッシュのランダム化）。
+    「同じ設定に対して毎回違う修正案が出る」ことを避けるため、
+    共通接頭辞の長さと名前順で並べて決定的に選ぶ。
+    """
     lowered = key.lower()
-    for candidate in candidates:
+    for candidate in sorted(candidates):
         if candidate.lower() == lowered:
             return candidate
-    # 1 文字の欠落・重複
-    for candidate in candidates:
-        if abs(len(candidate) - len(key)) <= 1 and (
-            candidate.startswith(key[:3]) or key.startswith(candidate[:3])
-        ):
-            return candidate
-    return None
+
+    def common_prefix(a: str, b: str) -> int:
+        n = 0
+        for ca, cb in zip(a, b):
+            if ca != cb:
+                break
+            n += 1
+        return n
+
+    # 長さが 1 文字以内の違いで、先頭 3 文字が共通するものを候補にする
+    near = [
+        c for c in candidates
+        if abs(len(c) - len(key)) <= 1
+        and (c.startswith(key[:3]) or key.startswith(c[:3]))
+    ]
+    if not near:
+        return None
+    # 共通接頭辞が長い順、同点なら名前順（実行ごとに変わらない）
+    near.sort(key=lambda c: (-common_prefix(c, key), c))
+    return near[0]
 
 
 def _check_value(cfg: dict, key: str, path: str) -> list[str]:
@@ -73,8 +122,12 @@ def _check_value(cfg: dict, key: str, path: str) -> list[str]:
         return []
     value = cfg[key]
     allowed = ALLOWED_VALUES[key]
-    if value in allowed:
-        return []
+    try:
+        if value in allowed:
+            return []
+    except TypeError:
+        # リストなど、集合の要素にできない型が書かれている
+        pass
     return [f"    {path}.{key}: 「{value}」は指定できません（{' / '.join(sorted(allowed))}）"]
 
 
@@ -85,31 +138,59 @@ def validate_source_keys(source_cfg: dict, index: int = 0) -> list[str]:
     問題があれば説明行のリストを返す。無ければ空リスト。
     """
     path = f"sources[{index}]"
-    problems = _check_keys(source_cfg, SOURCE_KEYS, path)
-    problems += _check_keys(source_cfg.get("excel") or {}, EXCEL_KEYS, f"{path}.excel")
-    problems += _check_keys(source_cfg.get("upsert") or {}, UPSERT_KEYS, f"{path}.upsert")
+    problems: list[str] = []
 
-    mapping = source_cfg.get("issue_mapping") or {}
+    source_cfg = _as_dict(source_cfg, path, problems)
+    if not source_cfg:
+        return problems
+
+    problems += _check_keys(source_cfg, SOURCE_KEYS, path)
+    problems += _check_keys(
+        _as_dict(source_cfg.get("excel"), f"{path}.excel", problems),
+        EXCEL_KEYS, f"{path}.excel",
+    )
+    problems += _check_keys(
+        _as_dict(source_cfg.get("upsert"), f"{path}.upsert", problems),
+        UPSERT_KEYS, f"{path}.upsert",
+    )
+
+    mapping = _as_dict(
+        source_cfg.get("issue_mapping"), f"{path}.issue_mapping", problems
+    )
     problems += _check_keys(mapping, ISSUE_MAPPING_KEYS, f"{path}.issue_mapping")
     problems += _check_value(mapping, "description_format", f"{path}.issue_mapping")
 
-    for i, cf in enumerate(mapping.get("custom_fields") or []):
+    cf_path = f"{path}.issue_mapping.custom_fields"
+    for i, cf in enumerate(_as_list(mapping.get("custom_fields"), cf_path, problems)):
         problems += _check_keys(
-            cf, CUSTOM_FIELD_KEYS, f"{path}.issue_mapping.custom_fields[{i}]"
+            _as_dict(cf, f"{cf_path}[{i}]", problems),
+            CUSTOM_FIELD_KEYS, f"{cf_path}[{i}]",
         )
 
-    for i, cond in enumerate(source_cfg.get("filters") or []):
+    for i, cond in enumerate(_as_list(
+        source_cfg.get("filters"), f"{path}.filters", problems
+    )):
+        cond = _as_dict(cond, f"{path}.filters[{i}]", problems)
         problems += _check_keys(cond, FILTER_KEYS, f"{path}.filters[{i}]")
         problems += _check_value(cond, "match", f"{path}.filters[{i}]")
 
-    for gi, group in enumerate(source_cfg.get("filter_groups") or []):
-        for i, cond in enumerate(group.get("filters") or []):
+    for gi, group in enumerate(_as_list(
+        source_cfg.get("filter_groups"), f"{path}.filter_groups", problems
+    )):
+        # グループ自体のキーも検証する。filters を綴り間違えると条件が空になり、
+        # ExcelReader.filter_rows(rows, None) が全行を返すため、シート全体が
+        # 無警告で登録対象になる。
+        group = _as_dict(group, f"{path}.filter_groups[{gi}]", problems)
+        problems += _check_keys(group, {"filters"}, f"{path}.filter_groups[{gi}]")
+        for i, cond in enumerate(_as_list(
+            group.get("filters"), f"{path}.filter_groups[{gi}].filters", problems
+        )):
             group_path = f"{path}.filter_groups[{gi}].filters[{i}]"
             problems += _check_keys(cond, FILTER_KEYS, group_path)
             problems += _check_value(cond, "match", group_path)
 
     # upsert を有効にしたのに判定方法が無いと、毎行が新規作成になる
-    upsert = source_cfg.get("upsert") or {}
+    upsert = _as_dict(source_cfg.get("upsert"), f"{path}.upsert", [])
     if upsert.get("enabled") and not (upsert.get("key_col") or upsert.get("match_summary")):
         problems.append(
             f"    {path}.upsert: enabled: true ですが key_col と match_summary の"
@@ -121,7 +202,11 @@ def validate_source_keys(source_cfg: dict, index: int = 0) -> list[str]:
 
 def validate_config_keys(config: dict) -> list[str]:
     """設定ファイル全体のキーと列挙値を検証する。"""
-    problems = _check_keys(config.get("backlog") or {}, BACKLOG_KEYS, "backlog")
-    for i, source_cfg in enumerate(config.get("sources") or []):
+    problems: list[str] = []
+    config = _as_dict(config, "設定ファイル", problems)
+    problems += _check_keys(
+        _as_dict(config.get("backlog"), "backlog", problems), BACKLOG_KEYS, "backlog"
+    )
+    for i, source_cfg in enumerate(_as_list(config.get("sources"), "sources", problems)):
         problems += validate_source_keys(source_cfg, i)
     return problems

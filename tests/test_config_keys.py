@@ -119,3 +119,80 @@ class TestMultipleSources:
         config = {"sources": [base_source(), base_source(issue_mapping={"sumary_col": "x"})]}
         problems = validate_config_keys(config)
         assert any("sources[1]" in p for p in problems)
+
+
+class TestMalformedConfig:
+    """
+    YAML の書き間違いでも、トレースバックではなく設定の問題として説明する。
+    設定を説明するための機構が設定のせいで落ちては意味がない。
+    """
+
+    def test_sources_の項目が空でも落ちない(self):
+        assert validate_config_keys({"sources": [None]}) == []
+
+    def test_issue_mapping_をリストで書いた場合(self):
+        config = {"sources": [{"name": "S", "issue_mapping": [{"summary_col": "件名"}]}]}
+        problems = validate_config_keys(config)
+        assert any("issue_mapping" in p and "キー: 値" in p for p in problems)
+
+    def test_filter_groups_をスカラーで書いた場合(self):
+        config = {"sources": [{"name": "S", "filter_groups": "abc"}]}
+        problems = validate_config_keys(config)
+        assert any("filter_groups" in p and "一覧" in p for p in problems)
+
+    def test_filters_をスカラーで書いた場合(self):
+        config = {"sources": [{"name": "S", "filters": "abc"}]}
+        assert any("filters" in p for p in validate_config_keys(config))
+
+    def test_custom_fields_の項目がスカラー(self):
+        config = {"sources": [{"name": "S",
+                               "issue_mapping": {"custom_fields": ["カテゴリ"]}}]}
+        assert validate_config_keys(config)          # 落ちずに説明する
+
+    def test_match_にリストを書いた場合(self):
+        config = {"sources": [{"name": "S",
+                               "filters": [{"col_name": "x", "match": ["exact"]}]}]}
+        assert any("match" in p for p in validate_config_keys(config))
+
+    def test_backlog_をリストで書いた場合(self):
+        assert validate_config_keys({"backlog": ["x"], "sources": []})
+
+    def test_設定全体が_dict_でない場合(self):
+        assert validate_config_keys([]) or validate_config_keys([]) == []
+
+
+class TestFilterGroupKeys:
+    """
+    グループ自体のキーを検証しないと、filters の綴り間違いで条件が空になり
+    ExcelReader.filter_rows(rows, None) が全行を返す。シート全体が無警告で
+    登録対象になる。
+    """
+
+    def test_グループのキー名の間違いを検出する(self):
+        cfg = base_source(filter_groups=[
+            {"filtres": [{"col_name": "状態", "value": "対応要"}]}
+        ])
+        problems = validate_source_keys(cfg)
+        assert any("filtres" in p and "filters" in p for p in problems)
+
+    def test_正しいグループは通る(self):
+        cfg = base_source(filter_groups=[
+            {"filters": [{"col_name": "状態", "value": "対応要"}]}
+        ])
+        assert validate_source_keys(cfg) == []
+
+
+class TestSuggestionIsStable:
+    """
+    set を走査すると候補が複数該当したとき選ばれる名前が実行ごとに変わる。
+    同じ設定に対して毎回違う修正案が出ると混乱する。
+    """
+
+    def test_同じ入力には同じ提案を返す(self):
+        from config_validation import ISSUE_MAPPING_KEYS, _closest
+        assert len({_closest("status_ma", ISSUE_MAPPING_KEYS) for _ in range(20)}) == 1
+
+    def test_より近い候補を選ぶ(self):
+        from config_validation import ISSUE_MAPPING_KEYS, _closest
+        assert _closest("status_ma", ISSUE_MAPPING_KEYS) == "status_map"
+        assert _closest("status_co", ISSUE_MAPPING_KEYS) == "status_col"
