@@ -892,6 +892,11 @@ def process_source(
             else:
                 print(f"  [{i}] 新規作成")
                 counts["created"] += 1
+                # 実行時は作成した課題を索引に加えるため、同じ件名の後続行は
+                # 「更新」になる。ドライランでも同じ判断になるよう、作成予定の
+                # 件名を索引に入れておく（Backlog へは書き込まない）。
+                if summary_index is not None:
+                    summary_index.add(plan.summary, "（作成予定）")
             if plan.warnings:
                 counts["partial"] += 1
 

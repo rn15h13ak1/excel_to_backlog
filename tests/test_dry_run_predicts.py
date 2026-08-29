@@ -128,3 +128,49 @@ class TestPlanRow:
 
         assert plan.action == "create"
         assert plan.existing_key is None
+
+
+class TestDuplicateSummaryInSheet:
+    """
+    実行時は作成した課題を索引に加えるため、同じ件名の後続行は「更新」になる。
+    ドライランは何も作成しないため索引が更新されず、そのままでは「2件作成」と
+    予測してしまう。作成予定の件名を索引に入れて判断を揃える。
+
+    この経路は「集計が一致する」テストのデータに同一件名が無かったため
+    見逃されていた。
+    """
+
+    def _cfg(self, source_cfg):
+        return source_cfg(
+            ["件名"], [["同じ件名"], ["同じ件名"]],
+            upsert={"enabled": True, "match_summary": True},
+        )
+
+    def test_同じ件名が2行あっても予測が一致する(self, source_cfg, master):
+        cfg = self._cfg(source_cfg)
+
+        dry = run(cfg, FakeBacklog(), master, dry_run=True)
+        real = run(cfg, FakeBacklog(), master, dry_run=False)
+
+        assert dry == real
+        assert dry["created"] == 1
+        assert dry["updated"] == 1
+
+    def test_ドライランは索引を更新しても書き込まない(self, source_cfg, master):
+        backlog = FakeBacklog()
+
+        run(self._cfg(source_cfg), backlog, master, dry_run=True)
+
+        assert backlog.create_calls == 0
+        assert backlog.updates == []
+
+    def test_3行以上でも2行目以降は更新になる(self, source_cfg, master):
+        cfg = source_cfg(
+            ["件名"], [["同じ件名"]] * 3,
+            upsert={"enabled": True, "match_summary": True},
+        )
+
+        dry = run(cfg, FakeBacklog(), master, dry_run=True)
+
+        assert dry["created"] == 1
+        assert dry["updated"] == 2
