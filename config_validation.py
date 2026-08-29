@@ -39,14 +39,22 @@ ALLOWED_VALUES = {
 }
 
 
-def _as_dict(value, path: str, problems: list[str]) -> dict:
+def _as_dict(value, path: str, problems: list[str], *, required: bool = False) -> dict:
     """
     dict であることを確かめて返す。違えば説明を積んで空 dict を返す。
 
     YAML の書き間違い（項目が空・リストとして書いた等）でも、
     トレースバックではなく設定の問題として説明する。
+
+    required=True の項目は、キーだけ書いて中身が空（None）の場合も報告する。
+    「キーはあるが値が None」は .get(key, {}) の既定値が効かないため、
+    そのまま進むと実行時に AttributeError になる。
     """
     if value is None:
+        if required:
+            problems.append(
+                f"    {path} の中身が空です（キーだけ書かれています）"
+            )
         return {}
     if not isinstance(value, dict):
         problems.append(
@@ -140,13 +148,13 @@ def validate_source_keys(source_cfg: dict, index: int = 0) -> list[str]:
     path = f"sources[{index}]"
     problems: list[str] = []
 
-    source_cfg = _as_dict(source_cfg, path, problems)
+    source_cfg = _as_dict(source_cfg, path, problems, required=True)
     if not source_cfg:
         return problems
 
     problems += _check_keys(source_cfg, SOURCE_KEYS, path)
     problems += _check_keys(
-        _as_dict(source_cfg.get("excel"), f"{path}.excel", problems),
+        _as_dict(source_cfg.get("excel"), f"{path}.excel", problems, required=True),
         EXCEL_KEYS, f"{path}.excel",
     )
     problems += _check_keys(
@@ -155,7 +163,8 @@ def validate_source_keys(source_cfg: dict, index: int = 0) -> list[str]:
     )
 
     mapping = _as_dict(
-        source_cfg.get("issue_mapping"), f"{path}.issue_mapping", problems
+        source_cfg.get("issue_mapping"), f"{path}.issue_mapping", problems,
+        required=True,
     )
     problems += _check_keys(mapping, ISSUE_MAPPING_KEYS, f"{path}.issue_mapping")
     problems += _check_value(mapping, "description_format", f"{path}.issue_mapping")

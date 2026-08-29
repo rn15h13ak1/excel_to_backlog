@@ -127,8 +127,25 @@ class TestMalformedConfig:
     設定を説明するための機構が設定のせいで落ちては意味がない。
     """
 
-    def test_sources_の項目が空でも落ちない(self):
-        assert validate_config_keys({"sources": [None]}) == []
+    def test_sources_の項目が空なら報告する(self):
+        """
+        キーだけ書いて中身が空だと .get(key, {}) の既定値が効かない。
+        素通りさせると実行時に AttributeError になる。
+        """
+        problems = validate_config_keys({"sources": [None]})
+        assert any("中身が空" in p for p in problems)
+
+    def test_issue_mapping_の中身が空なら報告する(self):
+        config = {"sources": [{"name": "S", "excel": {"path": "a.xlsx"},
+                               "issue_mapping": None}]}
+        assert any("issue_mapping" in p and "中身が空" in p
+                   for p in validate_config_keys(config))
+
+    def test_excel_の中身が空なら報告する(self):
+        config = {"sources": [{"name": "S", "excel": None,
+                               "issue_mapping": {"summary_col": "件名"}}]}
+        assert any("excel" in p and "中身が空" in p
+                   for p in validate_config_keys(config))
 
     def test_issue_mapping_をリストで書いた場合(self):
         config = {"sources": [{"name": "S", "issue_mapping": [{"summary_col": "件名"}]}]}
