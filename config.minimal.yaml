@@ -1,0 +1,41 @@
+# excel_to_backlog 最小構成の設定
+# ================================
+# ここから始めて、必要になった項目だけ config.sample.yaml から写してください。
+#
+#   cp config.minimal.yaml config.yaml
+#
+# 名前の調べ方:
+#   python excel_to_backlog.py --list-master     Backlog の種別・優先度・担当者など
+#   python excel_to_backlog.py --show-columns    Excel の列名
+
+backlog:
+  space_host: "yourcompany.backlog.com"
+  api_key: "YOUR_API_KEY_HERE"
+  project_key: "YOUR_PROJECT_KEY"
+
+sources:
+  - name: "タスク管理表"
+
+    excel:
+      path: "tasks.xlsx"      # Windows は 'C:\Users\...\tasks.xlsx' のようにシングルクォートで
+      # sheet: "Sheet1"       # 省略時は最初のシート
+      header_start_row: 1
+      data_start_row: 2
+
+    # 特定の行だけ登録する場合（省略時は全行）
+    # filters:
+    #   - col_name: "ステータス"
+    #     value: "未着手"
+
+    issue_mapping:
+      issue_type: "タスク"     # 必須。--list-master で確認
+      priority: "中"           # 必須。--list-master で確認
+      summary_col: "件名"      # 件名にする列。--show-columns で確認
+
+      # 本文に全列を出力する場合
+      description_format: "auto"
+
+    # 再実行時に既存課題を更新する場合（省略時は常に新規作成）
+    # upsert:
+    #   enabled: true
+    #   match_summary: true    # または key_col: "Backlog課題番号"

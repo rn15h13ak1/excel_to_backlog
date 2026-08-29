@@ -3,6 +3,7 @@ config.yaml
 
 # サンプル設定はコミット対象
 !config.sample.yaml
+!config.minimal.yaml
 
 # Python
 __pycache__/

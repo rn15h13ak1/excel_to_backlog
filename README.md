@@ -34,9 +34,13 @@ pip install -e ".[dev]"   # 開発時（テスト実行に必要）
 
 **1. 設定ファイルを作成する**
 
+最小構成（40行）から始めます。
+
 ```bash
-cp config.sample.yaml config.yaml
+cp config.minimal.yaml config.yaml
 ```
+
+> `config.sample.yaml` は全項目を網羅したリファレンスです（265行）。必要になった項目だけ写してください。
 
 **2. 設定に使える名前を確認する**
 

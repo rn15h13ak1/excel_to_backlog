@@ -22,6 +22,7 @@ from config_validation import (
 ROOT = Path(__file__).resolve().parent.parent
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 SAMPLE = (ROOT / "config.sample.yaml").read_text(encoding="utf-8")
+MINIMAL = (ROOT / "config.minimal.yaml").read_text(encoding="utf-8")
 CLI_SRC = (ROOT / "excel_to_backlog.py").read_text(encoding="utf-8")
 
 ALL_KEYS = (
@@ -140,3 +141,29 @@ class TestBehaviourDocumented:
         from excel_to_backlog import META_KEYS
         missing = {k for k in META_KEYS if f"{{{{{k}}}}}" not in README}
         assert missing == set(), f"特殊キーの表に無い: {sorted(missing)}"
+
+
+class TestMinimalConfig:
+    """最小構成は「コピーしてすぐ使える」ものであること。"""
+
+    def test_検証を通る(self):
+        from config_validation import validate_config_keys
+        assert validate_config_keys(yaml.safe_load(MINIMAL)) == []
+
+    def test_必須項目がそろっている(self):
+        config = yaml.safe_load(MINIMAL)
+        mapping = config["sources"][0]["issue_mapping"]
+        assert {"issue_type", "priority"} <= set(mapping)
+        assert "summary_col" in mapping or "summary_template" in mapping
+        assert "path" in config["sources"][0]["excel"]
+
+    def test_サンプルより十分短い(self):
+        """削る作業から始めなくてよい規模であること。"""
+        assert len(MINIMAL.splitlines()) < len(SAMPLE.splitlines()) / 3
+
+    def test_名前の調べ方が案内されている(self):
+        assert "--list-master" in MINIMAL
+        assert "--show-columns" in MINIMAL
+
+    def test_README_が最小構成を案内している(self):
+        assert "config.minimal.yaml" in README
