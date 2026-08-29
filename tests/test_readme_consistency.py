@@ -113,3 +113,30 @@ class TestExitCodesDocumented:
     @pytest.mark.parametrize("code", ["`0`", "`1`", "`2`"])
     def test_各コードが説明されている(self, code):
         assert code in README
+
+
+class TestBehaviourDocumented:
+    """
+    実装済みだが README に説明が無い振る舞いを検出する。
+    利用者が画面で見る言葉が README に無いと、意味を調べる手段がない。
+    """
+
+    @pytest.mark.parametrize("term", [
+        "再開スキップ",
+        "一部フィールド未設定",
+        "作成予定",
+        "更新予定",
+        "変更なし",
+    ])
+    def test_サマリーの用語が説明されている(self, term):
+        assert term in README, f"README に説明がない: {term}"
+
+    @pytest.mark.parametrize("term", ["Retry-After", "429", "401"])
+    def test_通信エラーの扱いが説明されている(self, term):
+        assert term in README
+
+    def test_テンプレートの特殊キーが網羅されている(self):
+        """META_KEYS に足したキーは README の表にも載せる。"""
+        from excel_to_backlog import META_KEYS
+        missing = {k for k in META_KEYS if f"{{{{{k}}}}}" not in README}
+        assert missing == set(), f"特殊キーの表に無い: {sorted(missing)}"
