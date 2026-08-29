@@ -19,7 +19,14 @@ from pathlib import Path
 
 # 「その行の処理は完了しており、再実行時に繰り返す必要がない」と見なす結果。
 # error / skipped は再実行の対象に含める（前者は失敗、後者は未処理のため）。
-COMPLETED_ACTIONS = frozenset({"created", "created_status_failed", "updated", "unchanged"})
+#
+# resumed（前回の実行で完了済みとして飛ばした行）も完了扱いにする。
+# これを含めないと --resume を繰り返したときにログが痩せていき、
+#   run_A: 1〜100 完了 → run_B: 101〜150 のみ記録
+# となって run_B で再開すると 1〜100 が再作成されてしまう。
+COMPLETED_ACTIONS = frozenset({
+    "created", "created_status_failed", "updated", "unchanged", "resumed",
+})
 
 FIELDNAMES = ["time", "source", "row", "action", "issue_key", "summary", "detail"]
 
@@ -77,9 +84,21 @@ class RunLog:
         self.written += 1
 
 
-def load_completed(path: str | Path) -> set[tuple[str, str]]:
+def completion_key(source: str, row: str, summary: str) -> tuple[str, str, str]:
     """
-    過去の実行ログを読み、処理済みの (ソース名, 件名) の集合を返す。
+    再開時に行を識別するキーを返す。
+
+    件名だけで識別すると、同じ件名の行が複数あるときに区別できない。
+    「1 回目で処理済みの行」と「まだ処理していない同名の行」が同一視され、
+    未処理の行が「再開スキップ」と表示されて永久に作成されなくなる。
+    行番号を含めることでこれを防ぐ。
+    """
+    return (source, str(row), summary)
+
+
+def load_completed(path: str | Path) -> set[tuple[str, str, str]]:
+    """
+    過去の実行ログを読み、処理済みの (ソース名, 行番号, 件名) の集合を返す。
 
     --resume で「作成・更新まで終わっている行」を飛ばすために使う。
     error / skipped の行は含めないため、失敗した行は再実行される。
@@ -88,11 +107,15 @@ def load_completed(path: str | Path) -> set[tuple[str, str]]:
     if not log_path.exists():
         raise FileNotFoundError(f"実行ログが見つかりません: {log_path}")
 
-    completed: set[tuple[str, str]] = set()
+    completed: set[tuple[str, str, str]] = set()
     with open(log_path, encoding="utf-8-sig", newline="") as f:
         for record in csv.DictReader(f):
             if record.get("action") in COMPLETED_ACTIONS:
-                completed.add((record.get("source", ""), record.get("summary", "")))
+                completed.add(completion_key(
+                    record.get("source", ""),
+                    record.get("row", ""),
+                    record.get("summary", ""),
+                ))
 
     print(f"  再開: 処理済み {len(completed)} 件を読み込みました（{log_path.name}）")
     return completed

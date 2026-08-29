@@ -44,7 +44,7 @@ import yaml
 from backlog_client import BacklogAPIError, BacklogClient, BacklogNoChangeError
 from excel_reader import ExcelReader
 from mapper import BacklogMaster, IssueMapper
-from run_log import RunLog, default_log_path, load_completed
+from run_log import RunLog, completion_key, default_log_path, load_completed
 from summary_index import SummaryIndex
 
 
@@ -669,7 +669,7 @@ def process_source(
     master: BacklogMaster,
     dry_run: bool,
     run_log: RunLog | None = None,
-    completed: set[tuple[str, str]] | None = None,
+    completed: set[tuple[str, str, str]] | None = None,
     summary_index: SummaryIndex | None = None,
     counts: dict | None = None,
 ) -> dict:
@@ -806,9 +806,13 @@ def process_source(
             continue
 
         # --resume: 前回の実行で作成・更新まで完了した行は飛ばす
-        if completed is not None and (name, params.get("summary", "")) in completed:
-            print(f"  [{i}] — 再開スキップ（前回処理済み）: {params.get('summary', '')}")
+        summary = params.get("summary", "")
+        if completed is not None and completion_key(name, i, summary) in completed:
+            print(f"  [{i}] — 再開スキップ（前回処理済み）: {summary}")
             counts["resumed"] += 1
+            # 再開スキップもログに残す。残さないと --resume を繰り返したときに
+            # ログが痩せ、次の再開で作成済みの行が再作成される。
+            log(row=i, action="resumed", summary=summary)
             continue
 
         # API を1度でも呼んだ行だけレート制限用の待機を入れる

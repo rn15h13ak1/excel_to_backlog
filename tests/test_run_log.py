@@ -123,7 +123,8 @@ class TestResume:
             )
 
         completed = load_completed(first)
-        assert completed == {("テスト", "課題A"), ("テスト", "課題C")}
+        # (ソース名, 行番号, 件名) で識別する。件名だけでは同名の行を区別できない
+        assert completed == {("テスト", "2", "課題A"), ("テスト", "4", "課題C")}
 
         client = FakeClient()
         counts = etb.process_source(
