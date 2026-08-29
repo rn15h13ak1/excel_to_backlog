@@ -38,7 +38,25 @@ pip install -e ".[dev]"   # 開発時（テスト実行に必要）
 cp config.sample.yaml config.yaml
 ```
 
-**2. `config.yaml` を編集する**
+**2. 設定に使える名前を確認する**
+
+`config.yaml` に書く種別名・優先度名・担当者名・カスタム属性名は、Backlog のプロジェクト設定と完全に一致させる必要があります。接続設定だけ書けば、使える名前を一覧できます。
+
+```bash
+python excel_to_backlog.py --list-master
+```
+
+```
+種別（issue_mapping.issue_type）
+  タスク
+  バグ
+
+カスタム属性（issue_mapping.custom_fields.field_name）
+  カテゴリ  [単一リスト]
+      選択肢: 設計 / 開発 / QA
+```
+
+**3. `config.yaml` を編集する**
 
 ```yaml
 backlog:
@@ -47,19 +65,19 @@ backlog:
   project_key: "MYPROJ"
 ```
 
-**3. ドライランで登録内容を確認する**
+**4. ドライランで登録内容を確認する**
 
 ```bash
 python excel_to_backlog.py
 ```
 
-**4. Markdown プレビューで詳細を確認する（任意）**
+**5. Markdown プレビューで詳細を確認する（任意）**
 
 ```bash
 python excel_to_backlog.py --preview
 ```
 
-**5. 実際に登録・更新する**
+**6. 実際に登録・更新する**
 
 ```bash
 python excel_to_backlog.py --execute
@@ -80,6 +98,7 @@ python excel_to_backlog.py [オプション]
 | `--preview` | 登録予定の課題内容（本文全文）を Markdown ファイルに出力する |
 | `--source "名前"` | 指定した name のソースのみ処理する |
 | `--config path` | 設定ファイルのパスを指定する（デフォルト: スクリプトと同じディレクトリの `config.yaml`） |
+| `--list-master` | 設定に使える名前（種別・優先度・ステータス・担当者・カスタム属性）を一覧表示する |
 | `-y` / `--yes` | 実行前の確認を省略する（非対話環境ではこの指定が必要） |
 | `--resume CSV` | 過去の実行ログを読み、作成・更新済みの行を飛ばして再開する |
 | `--no-log` | 実行ログ（`run_*.csv`）を出力しない |

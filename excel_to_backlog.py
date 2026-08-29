@@ -665,6 +665,67 @@ def confirm_run(sources_cfg: list, master: BacklogMaster, assume_yes: bool) -> N
 
 
 # ------------------------------------------------------------------
+# マスターデータの一覧表示
+# ------------------------------------------------------------------
+
+# Backlog のカスタム属性の型（typeId → 表示名）
+CUSTOM_FIELD_TYPES = {
+    1: "文字列", 2: "文章", 3: "数値", 4: "日付",
+    5: "単一リスト", 6: "複数リスト", 7: "チェックボックス", 8: "ラジオ",
+}
+
+
+def print_master_data(master: BacklogMaster) -> None:
+    """
+    設定に書ける名前の一覧を表示する。
+
+    config.yaml を書くには Backlog 側の種別名・優先度名・ステータス名・
+    担当者名・カスタム属性名が必要だが、これらは設定を書き終えて実行して
+    初めて分かるという順序になっていた。特にカスタム属性名はどこにも
+    表示されず、「見つかりません」と言われても正しい名前を知る手段がなかった。
+    """
+    def section(title: str, values) -> None:
+        print(f"\n{title}")
+        if not values:
+            print("  （取得できませんでした）")
+            return
+        for v in values:
+            print(f"  {v}")
+
+    print("=" * 55)
+    print("設定に使える名前の一覧")
+    print("=" * 55)
+
+    section("種別（issue_mapping.issue_type）", list(master.issue_type_map))
+    section("優先度（issue_mapping.priority）", list(master.priority_map))
+    section("ステータス（issue_mapping.status_map の変換先）", list(master.status_map))
+
+    # user_map は表示名とログインIDの両方を持つため、ID ごとにまとめ直す
+    by_id: dict[int, list[str]] = {}
+    for name, uid in master.user_map.items():
+        by_id.setdefault(uid, []).append(name)
+    section(
+        "担当者（issue_mapping.assignee_col の値 / default_assignee）",
+        [" / ".join(names) for names in by_id.values()],
+    )
+
+    print("\nカスタム属性（issue_mapping.custom_fields.field_name）")
+    if not master.custom_field_map:
+        print("  （このプロジェクトには定義されていません）")
+    for name, info in master.custom_field_map.items():
+        type_name = CUSTOM_FIELD_TYPES.get(info.get("typeId"), f"typeId={info.get('typeId')}")
+        print(f"  {name}  [{type_name}]")
+        items = list(info.get("items") or {})
+        if items:
+            print(f"      選択肢: {' / '.join(items)}")
+
+    print()
+    print("─" * 55)
+    print("  これらの名前を config.yaml にそのまま記述してください。")
+    print("  Excel の列名は --show-columns で確認できます。")
+
+
+# ------------------------------------------------------------------
 # 行ごとの処理計画
 # ------------------------------------------------------------------
 
@@ -1064,6 +1125,11 @@ def main():
         help="実際に Backlog へ課題を作成/更新する（省略時はドライラン）",
     )
     parser.add_argument(
+        "--list-master",
+        action="store_true",
+        help="設定に使える名前（種別・優先度・ステータス・担当者・カスタム属性）を一覧表示する",
+    )
+    parser.add_argument(
         "-y", "--yes",
         action="store_true",
         help="実行前の確認を省略する（非対話環境ではこの指定が必要）",
@@ -1106,7 +1172,8 @@ def main():
             print(line, file=sys.stderr)
         sys.exit(1)
 
-    if not sources_cfg:
+    # --list-master は設定を書く前に使うため、sources がまだ無くても通す
+    if not sources_cfg and not args.list_master:
         print("エラー: config.yaml に sources が設定されていません。", file=sys.stderr)
         sys.exit(1)
 
@@ -1149,6 +1216,12 @@ def main():
     # マスターデータ取得（ドライランでも接続確認のため取得）
     print("マスターデータを取得中...")
     master = BacklogMaster.build(client, backlog_cfg["project_key"])
+
+    # --list-master: 設定に書ける名前を一覧表示して終了
+    if args.list_master:
+        print_master_data(master)
+        return
+
     print(
         f"  種別: {list(master.issue_type_map.keys())}\n"
         f"  優先度: {list(master.priority_map.keys())}\n"
