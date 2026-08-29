@@ -201,6 +201,12 @@ class TestFilterRows:
         ])
         assert len(got) == 1
 
+    def test_前方一致(self):
+        got = ExcelReader.filter_rows(
+            self.ROWS, [{"col_name": "ステータス", "value": "完", "match": "startswith"}]
+        )
+        assert len(got) == 2
+
     def test_部分一致(self):
         got = ExcelReader.filter_rows(
             self.ROWS, [{"col_name": "ステータス", "value": "対応", "match": "contains"}]
@@ -240,3 +246,131 @@ class TestExcelConfigValidation:
         reader = ExcelReader({"path": str(tmp_path / "ない.xlsx")})
         with pytest.raises(FileNotFoundError):
             reader.read()
+
+
+class TestColumnRange:
+    """col_start / col_end による読み込み範囲の指定。"""
+
+    def _sheet(self, tmp_path):
+        wb = Workbook()
+        ws = wb.active
+        for col, header in zip("ABCD", ["項番", "件名", "備考", "内部用"]):
+            ws[f"{col}1"] = header
+        ws["A2"], ws["B2"], ws["C2"], ws["D2"] = 1, "課題A", "メモ", "見せない"
+        path = tmp_path / "cols.xlsx"
+        wb.save(path)
+        return path
+
+    def test_既定では最終列まで読む(self, tmp_path):
+        headers, _ = ExcelReader({"path": str(self._sheet(tmp_path))}).read()
+        assert headers == ["項番", "件名", "備考", "内部用"]
+
+    def test_col_end_で右端を絞れる(self, tmp_path):
+        headers, rows = ExcelReader(
+            {"path": str(self._sheet(tmp_path)), "col_end": "C"}
+        ).read()
+        assert headers == ["項番", "件名", "備考"]
+        assert "内部用" not in rows[0]
+
+    def test_col_start_で左端を絞れる(self, tmp_path):
+        headers, _ = ExcelReader(
+            {"path": str(self._sheet(tmp_path)), "col_start": "B", "col_end": "C"}
+        ).read()
+        assert headers == ["件名", "備考"]
+
+    def test_小文字の列ラベルも受け付ける(self, tmp_path):
+        headers, _ = ExcelReader(
+            {"path": str(self._sheet(tmp_path)), "col_start": "b", "col_end": "c"}
+        ).read()
+        assert headers == ["件名", "備考"]
+
+    def test_col_start_が_col_end_より後ならエラー(self, tmp_path):
+        reader = ExcelReader(
+            {"path": str(self._sheet(tmp_path)), "col_start": "C", "col_end": "A"}
+        )
+        with pytest.raises(ValueError, match="col_start"):
+            reader.read()
+
+
+class TestSheetSelection:
+    def _book(self, tmp_path):
+        wb = Workbook()
+        first = wb.active
+        first.title = "最初のシート"
+        first["A1"], first["A2"] = "件名", "1枚目"
+        second = wb.create_sheet("対象シート")
+        second["A1"], second["A2"] = "件名", "2枚目"
+        path = tmp_path / "sheets.xlsx"
+        wb.save(path)
+        return path
+
+    def test_省略時は最初のシート(self, tmp_path):
+        _, rows = ExcelReader({"path": str(self._book(tmp_path))}).read()
+        assert rows[0]["件名"] == "1枚目"
+
+    def test_シート名を指定できる(self, tmp_path):
+        _, rows = ExcelReader(
+            {"path": str(self._book(tmp_path)), "sheet": "対象シート"}
+        ).read()
+        assert rows[0]["件名"] == "2枚目"
+
+    def test_存在しないシート名はエラーで候補を示す(self, tmp_path):
+        reader = ExcelReader({"path": str(self._book(tmp_path)), "sheet": "無いシート"})
+        with pytest.raises(ValueError) as exc:
+            reader.read()
+        assert "無いシート" in str(exc.value)
+        assert "対象シート" in str(exc.value)      # 利用可能な名前を出す
+
+
+class TestDateCells:
+    """日付型セルは "YYYY/MM/DD" 文字列として読む。"""
+
+    def test_datetime_セルを日付文字列にする(self, tmp_path):
+        from datetime import datetime
+        wb = Workbook()
+        ws = wb.active
+        ws["A1"], ws["A2"] = "期限", datetime(2025, 1, 5, 10, 30)
+        path = tmp_path / "dt.xlsx"
+        wb.save(path)
+
+        _, rows = ExcelReader({"path": str(path)}).read()
+
+        assert rows[0]["期限"] == "2025/01/05"
+
+    def test_date_セルも同じ形式(self, tmp_path):
+        from datetime import date
+        wb = Workbook()
+        ws = wb.active
+        ws["A1"], ws["A2"] = "期限", date(2025, 12, 31)
+        path = tmp_path / "d.xlsx"
+        wb.save(path)
+
+        _, rows = ExcelReader({"path": str(path)}).read()
+
+        assert rows[0]["期限"] == "2025/12/31"
+
+    def test_日付セルの取り消し線も行ごとに囲む(self):
+        from datetime import date
+        assert cell_to_markdown(_cell(date(2025, 1, 5), strike=True)) == "~~2025/01/05~~"
+
+
+class TestRichTextUnavailable:
+    """
+    古い openpyxl では rich_text が使えない。警告を出して平文で続行する。
+    静かに機能が失われると、取り消し線が反映されない原因が分からない。
+    """
+
+    def test_警告を出して平文行を返す(self, tmp_path, monkeypatch, capsys):
+        import excel_reader
+        monkeypatch.setattr(excel_reader, "_RICH_TEXT_AVAILABLE", False)
+
+        wb = Workbook()
+        ws = wb.active
+        ws["A1"], ws["A2"] = "件名", "課題A"
+        path = tmp_path / "plain.xlsx"
+        wb.save(path)
+
+        headers, plain, formatted = ExcelReader({"path": str(path)}).read_with_format()
+
+        assert plain == formatted            # 書式付き行は平文と同じ
+        assert "リッチテキスト機能が利用できません" in capsys.readouterr().err

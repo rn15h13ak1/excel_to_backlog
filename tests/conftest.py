@@ -7,6 +7,9 @@ FakeBacklog は課題の状態を保持するため、「作成 → 件名を変
 のような複数回の実行にまたがる振る舞いを検証できる。
 """
 
+import re
+import zipfile
+
 import pytest
 from openpyxl import Workbook
 
@@ -193,5 +196,81 @@ def source_cfg(make_excel):
         }
         cfg.update(extra)
         return cfg
+
+    return _make
+
+
+# ------------------------------------------------------------------
+# リッチテキスト（取り消し線）を含む Excel の生成
+# ------------------------------------------------------------------
+
+def _runs_xml(runs) -> str:
+    """
+    [(テキスト, 取り消し線 or None), ...] を <is> 要素の XML にする。
+
+    None を渡すと <rPr> を持たないランになる。openpyxl はこれを素の str として
+    返し、<rPr> を持つランを TextBlock として返す。Excel が「セル全体に
+    取り消し線 → 一部を解除」した際の保存形式を再現できる。
+    """
+    parts = []
+    for text, struck in runs:
+        rpr = "" if struck is None else (
+            "<rPr><strike/></rPr>" if struck else '<rPr><strike val="false"/></rPr>'
+        )
+        parts.append(f"<r>{rpr}<t xml:space=\"preserve\">{text}</t></r>")
+    return "<is>" + "".join(parts) + "</is>"
+
+
+@pytest.fixture
+def make_rich_excel(tmp_path):
+    """
+    リッチテキストのセルを含む xlsx を作るファクトリ。
+
+        path = make_rich_excel(
+            ["件名", "対応内容"],
+            [["課題A", [("残る", False), ("消える", True)]]],
+        )
+
+    セルの値には文字列か、ラン定義のリストを渡す。
+
+    openpyxl 3.1 は CellRichText を含むブックを保存できないため、
+    いったん目印を書いたブックを保存し、シートの XML を差し替えて作る。
+    openpyxl は文字列セルを t="inlineStr" で書くため、<is> の中身を
+    ランに置き換えればよい（sharedStrings は生成されない）。
+    """
+    counter = {"n": 0}
+
+    def _make(headers, rows, name=None):
+        counter["n"] += 1
+        wb = Workbook()
+        ws = wb.active
+        for col, header in enumerate(headers, start=1):
+            ws.cell(row=1, column=col, value=header)
+
+        markers = {}
+        for r, row in enumerate(rows, start=2):
+            for c, value in enumerate(row, start=1):
+                if isinstance(value, list):
+                    marker = f"@@RICH{len(markers)}@@"
+                    markers[marker] = _runs_xml(value)
+                    ws.cell(row=r, column=c, value=marker)
+                else:
+                    ws.cell(row=r, column=c, value=value)
+
+        base = tmp_path / f"_base{counter['n']}.xlsx"
+        wb.save(base)
+
+        path = tmp_path / (name or f"rich{counter['n']}.xlsx")
+        with zipfile.ZipFile(base) as src, zipfile.ZipFile(path, "w") as dst:
+            for item in src.namelist():
+                data = src.read(item)
+                if item == "xl/worksheets/sheet1.xml":
+                    xml = data.decode()
+                    for marker, runs_xml in markers.items():
+                        xml = re.sub(f"<is><t[^>]*>{marker}</t></is>", runs_xml, xml)
+                    data = xml.encode()
+                dst.writestr(item, data)
+        base.unlink()
+        return path
 
     return _make

@@ -393,20 +393,13 @@ class ExcelReader:
         headers: list[str],
         col_start_idx: int,
         col_end_idx: int,
-        use_markdown: bool = False,
     ) -> list[dict[str, str]]:
         """
         データ行（data_start_row ～ シート最終行）を読み取り、
         {ヘッダー名: セル値} の dict リストを返す。
         空行（全セルが空）はスキップする。
 
-        Parameters
-        ----------
-        use_markdown : bool
-            True のとき cell_to_markdown() で書式付き Markdown 文字列を生成する。
-            False（デフォルト）は cell_to_str() でプレーンテキストを返す。
-            空行判定はプレーンテキストで行うため、use_markdown=True のときも
-            空行は正しくスキップされる。
+        書式付き（取り消し線）の行が必要な場合は _build_rows_dual() を使う。
         """
         rows = []
         max_row = ws.max_row or 0
@@ -419,10 +412,7 @@ class ExcelReader:
                 plain = cell_to_str(cell.value)
                 if plain:
                     is_empty = False
-                if use_markdown:
-                    row_data[headers[i]] = cell_to_markdown(cell)
-                else:
-                    row_data[headers[i]] = plain
+                row_data[headers[i]] = plain
 
             if not is_empty:
                 row_data[self.ROW_NUMBER_KEY] = str(row_idx)
