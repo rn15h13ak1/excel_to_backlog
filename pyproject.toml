@@ -16,6 +16,11 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+# `excel-to-backlog` として実行できるようにする。
+# python のパスや作業ディレクトリを意識せずに済む。
+[project.scripts]
+excel-to-backlog = "excel_to_backlog:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov>=4.0", "mutmut>=3.0"]
 

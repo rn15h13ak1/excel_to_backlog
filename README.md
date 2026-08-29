@@ -20,12 +20,26 @@ Excel で管理しているタスク・問い合わせ一覧などを Backlog �
 
 **Python 3.10 以上**
 
-```bash
-pip install -e .          # 依存関係（openpyxl / pyyaml）をまとめて導入
-```
+仮想環境を作ってインストールします。システムの `python3` に直接入れると、依存が入っている環境と実行に使う環境がずれて `ImportError` になります。
 
 ```bash
-pip install -e ".[dev]"   # 開発時（テスト実行に必要）
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -e .
+```
+
+インストールすると `excel-to-backlog` コマンドが使えます。
+
+```bash
+excel-to-backlog --help
+```
+
+以降の例では `excel-to-backlog` と書きます。`excel-to-backlog` でも同じです。
+
+開発時（テスト実行に必要）:
+
+```bash
+pip install -e ".[dev]"
 ```
 
 ---
@@ -47,7 +61,7 @@ cp config.minimal.yaml config.yaml
 `config.yaml` に書く種別名・優先度名・担当者名・カスタム属性名は、Backlog のプロジェクト設定と完全に一致させる必要があります。接続設定だけ書けば、使える名前を一覧できます。
 
 ```bash
-python excel_to_backlog.py --list-master
+excel-to-backlog --list-master
 ```
 
 ```
@@ -74,7 +88,7 @@ backlog:
 `summary_col` や `filters` に書く列名は、実際に読み取られる名前と完全に一致させる必要があります。複数行ヘッダーは `" / "` で結合され、同名の列には連番が付くため、目視では分かりません。
 
 ```bash
-python excel_to_backlog.py --show-columns
+excel-to-backlog --show-columns
 ```
 
 ```
@@ -87,13 +101,13 @@ python excel_to_backlog.py --show-columns
 **5. ドライランで登録内容を確認する**
 
 ```bash
-python excel_to_backlog.py
+excel-to-backlog
 ```
 
 **6. Markdown プレビューで詳細を確認する（任意）**
 
 ```bash
-python excel_to_backlog.py --preview
+excel-to-backlog --preview
 ```
 
 **7. まず数件だけ登録して確認する**
@@ -101,13 +115,13 @@ python excel_to_backlog.py --preview
 いきなり全件登録せず、先頭の数行だけ実際に作成して Backlog 上で確認できます。
 
 ```bash
-python excel_to_backlog.py --execute --limit 3
+excel-to-backlog --execute --limit 3
 ```
 
 **8. 残りをすべて登録・更新する**
 
 ```bash
-python excel_to_backlog.py --execute
+excel-to-backlog --execute
 ```
 
 > `upsert` を有効にしていれば、`--limit` で作成済みの行は次の実行で更新扱いになります。無効の場合は `--resume` で実行ログを渡すと重複を避けられます。
@@ -117,7 +131,7 @@ python excel_to_backlog.py --execute
 ## 実行コマンド一覧
 
 ```
-python excel_to_backlog.py [オプション]
+excel-to-backlog [オプション]
 ```
 
 | オプション | 説明 |
@@ -126,7 +140,7 @@ python excel_to_backlog.py [オプション]
 | `--execute` | Backlog に実際に課題を作成・更新する |
 | `--preview` | 登録予定の課題内容（本文全文）を Markdown ファイルに出力する |
 | `--source "名前"` | 指定した name のソースのみ処理する |
-| `--config path` | 設定ファイルのパスを指定する（デフォルト: スクリプトと同じディレクトリの `config.yaml`） |
+| `--config path` | 設定ファイルのパスを指定する（デフォルト: カレントの `config.yaml`、無ければスクリプトと同じ場所） |
 | `--list-master` | 設定に使える名前（種別・優先度・ステータス・担当者・カスタム属性）を一覧表示する |
 | `--show-columns` | Excel から読み取れる列名を一覧表示する（Backlog へは接続しない） |
 | `--limit N` | 各ソースで処理する行数を先頭 N 行に制限する（初回に少数だけ試す用） |
@@ -200,7 +214,7 @@ python excel_to_backlog.py [オプション]
 通信エラーなどで中断した場合は、続きから再開できます。
 
 ```bash
-python excel_to_backlog.py --execute --resume run_20250828_101500.csv
+excel-to-backlog --execute --resume run_20250828_101500.csv
 ```
 
 作成・更新まで完了した行だけを飛ばすため、失敗した行は再実行されます。
@@ -600,7 +614,7 @@ upsert:
 `--debug` オプションをつけて実行すると、送信パラメータとBacklogからのレスポンスに含まれるカスタム属性の値が出力されます。Backlog が値を受け取ったかどうかを確認してください。
 
 ```bash
-python excel_to_backlog.py --execute --debug
+excel-to-backlog --execute --debug
 ```
 
 **「— 変更なし」と表示されて更新されない**

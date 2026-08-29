@@ -1214,11 +1214,17 @@ def main():
   python excel_to_backlog.py --config ./config.yaml --execute
 """,
     )
-    default_config = str(Path(__file__).parent / "config.yaml")
+    # 設定ファイルの既定値。カレントディレクトリを優先し、無ければ
+    # スクリプトと同じ場所を見る。excel-to-backlog コマンドとして
+    # どこからでも実行できるようにするため。
+    default_config = str(
+        Path("config.yaml") if Path("config.yaml").exists()
+        else Path(__file__).parent / "config.yaml"
+    )
     parser.add_argument(
         "--config",
         default=default_config,
-        help="設定ファイルのパス（デフォルト: スクリプトと同じディレクトリの config.yaml）",
+        help="設定ファイルのパス（デフォルト: カレントの config.yaml、無ければスクリプトと同じ場所）",
     )
     parser.add_argument(
         "--source",
