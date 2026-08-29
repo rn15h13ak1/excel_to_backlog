@@ -65,19 +65,34 @@ backlog:
   project_key: "MYPROJ"
 ```
 
-**4. ドライランで登録内容を確認する**
+**4. Excel の列名を確認する**
+
+`summary_col` や `filters` に書く列名は、実際に読み取られる名前と完全に一致させる必要があります。複数行ヘッダーは `" / "` で結合され、同名の列には連番が付くため、目視では分かりません。
+
+```bash
+python excel_to_backlog.py --show-columns
+```
+
+```
+    A: 項番  例: 1
+    B: 件名  例: ログイン不具合
+    C: 対応内容 / 詳細  例: 再現手順は…
+    D: 対応内容 / 補足  例: 担当と相談中
+```
+
+**5. ドライランで登録内容を確認する**
 
 ```bash
 python excel_to_backlog.py
 ```
 
-**5. Markdown プレビューで詳細を確認する（任意）**
+**6. Markdown プレビューで詳細を確認する（任意）**
 
 ```bash
 python excel_to_backlog.py --preview
 ```
 
-**6. 実際に登録・更新する**
+**7. 実際に登録・更新する**
 
 ```bash
 python excel_to_backlog.py --execute
@@ -99,6 +114,7 @@ python excel_to_backlog.py [オプション]
 | `--source "名前"` | 指定した name のソースのみ処理する |
 | `--config path` | 設定ファイルのパスを指定する（デフォルト: スクリプトと同じディレクトリの `config.yaml`） |
 | `--list-master` | 設定に使える名前（種別・優先度・ステータス・担当者・カスタム属性）を一覧表示する |
+| `--show-columns` | Excel から読み取れる列名を一覧表示する（Backlog へは接続しない） |
 | `-y` / `--yes` | 実行前の確認を省略する（非対話環境ではこの指定が必要） |
 | `--resume CSV` | 過去の実行ログを読み、作成・更新済みの行を飛ばして再開する |
 | `--no-log` | 実行ログ（`run_*.csv`）を出力しない |

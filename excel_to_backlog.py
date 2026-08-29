@@ -44,7 +44,7 @@ import yaml
 
 from backlog_client import BacklogAPIError, BacklogClient, BacklogNoChangeError
 from config_validation import validate_config_keys
-from excel_reader import ExcelReader
+from excel_reader import ExcelReader, col_letter_to_index
 from mapper import BacklogMaster, IssueMapper
 from run_log import RunLog, completion_key, default_log_path, load_completed
 from summary_index import SummaryIndex
@@ -726,6 +726,61 @@ def print_master_data(master: BacklogMaster) -> None:
 
 
 # ------------------------------------------------------------------
+# Excel の列名一覧
+# ------------------------------------------------------------------
+
+def print_source_columns(sources_cfg: list) -> int:
+    """
+    各ソースの Excel から読み取れる列名を一覧表示する。
+
+    設定に書く列名は、複数行ヘッダーの " / " 結合結果や、重複時に付く
+    " (2)" の連番まで含めて正確に一致させる必要がある。これらは実際に
+    読み込ませないと分からないため、設定を書く前に確認できるようにする。
+
+    Returns
+    -------
+    int : 読み込みに失敗したソースの数
+    """
+    from openpyxl.utils import get_column_letter
+
+    failures = 0
+    for source_cfg in sources_cfg:
+        name = source_cfg.get("name", "（名前なし）")
+        excel_cfg = source_cfg.get("excel") or {}
+        print(f"\n{'=' * 55}")
+        print(f"[{name}] {excel_cfg.get('path', '（path 未設定）')}")
+        sheet = excel_cfg.get("sheet")
+        print(f"  シート: {sheet or '（最初のシート）'}")
+        print("=" * 55)
+
+        try:
+            reader = ExcelReader(excel_cfg)
+            headers, rows = reader.read()
+        except Exception as e:
+            print(f"  ⚠ 読み込みに失敗しました: {e}", file=sys.stderr)
+            failures += 1
+            continue
+
+        start = col_letter_to_index(reader.col_start_str)
+        for i, header in enumerate(headers):
+            letter = get_column_letter(start + i + 1)
+            # その列に値が入っている最初の行を例として添える
+            sample = next(
+                (r[header] for r in rows if r.get(header)), ""
+            )
+            sample = f"  例: {sample[:28]}" if sample else ""
+            print(f"  {letter:>3}: {header}{sample}")
+
+        print(f"\n  読込 {len(rows)} 行（フィルター前）")
+
+    print()
+    print("─" * 55)
+    print("  この列名を config.yaml にそのまま記述してください。")
+    print("  複数行ヘッダーは \" / \" で結合され、重複した列には連番が付きます。")
+    return failures
+
+
+# ------------------------------------------------------------------
 # 行ごとの処理計画
 # ------------------------------------------------------------------
 
@@ -1125,6 +1180,11 @@ def main():
         help="実際に Backlog へ課題を作成/更新する（省略時はドライラン）",
     )
     parser.add_argument(
+        "--show-columns",
+        action="store_true",
+        help="Excel から読み取れる列名を一覧表示する（Backlog へは接続しない）",
+    )
+    parser.add_argument(
         "--list-master",
         action="store_true",
         help="設定に使える名前（種別・優先度・ステータス・担当者・カスタム属性）を一覧表示する",
@@ -1203,6 +1263,11 @@ def main():
     else:
         print("モード      : EXECUTE（Backlog に登録/更新します）")
     print()
+
+    # --show-columns: Excel の列名だけ表示して終了。
+    # 設定を書いている途中で使うため、Backlog への接続は行わない。
+    if args.show_columns:
+        sys.exit(1 if print_source_columns(sources_cfg) else 0)
 
     # BacklogClient 初期化
     client = BacklogClient(
