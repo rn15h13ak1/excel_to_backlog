@@ -32,6 +32,8 @@ Excel → Backlog 課題登録ツール
 """
 
 import argparse
+import contextlib
+import io
 import re
 import sys
 import time
@@ -616,7 +618,12 @@ class ConfirmationDeclined(Exception):
     """ユーザーが実行前の確認で「いいえ」を選んだ。"""
 
 
-def confirm_run(sources_cfg: list, master: BacklogMaster, assume_yes: bool) -> None:
+def confirm_run(
+    sources_cfg: list,
+    master: BacklogMaster,
+    assume_yes: bool,
+    planned: dict | None = None,
+) -> None:
     """
     Backlog への書き込みを始める前に、一度だけ確認を求める。
 
@@ -642,7 +649,17 @@ def confirm_run(sources_cfg: list, master: BacklogMaster, assume_yes: bool) -> N
     print("Backlog への書き込みを開始します")
     print("─" * 55)
     print(f"  対象ソース: {', '.join(names)}")
-    print("  内容は --preview / ドライランで事前に確認できます。")
+
+    # 何件を作成し何件を更新するのかを、書き込む前に示す。
+    # 「更新のつもりが全部作成になっていた」といった取り違えを
+    # 実行前に気づけるようにする。
+    if planned is not None:
+        print(f"  作成予定: {planned['created']} 件 / 更新予定: {planned['updated']} 件")
+        for key, label in (("unchanged", "変更なし"), ("resumed", "再開スキップ"),
+                           ("skipped", "スキップ"), ("partial", "一部フィールド未設定")):
+            if planned.get(key):
+                print(f"  {label}: {planned[key]} 件")
+    print("  内容は --preview で詳しく確認できます。")
     print()
 
     if assume_yes:
@@ -1352,8 +1369,28 @@ def main():
     # 確認は Backlog へ書き込む場合のみ。ドライランは何も変更しないため、
     # 確認を求めると無意味な入力待ちになり、非対話環境では実行すらできなくなる。
     if not dry_run:
+        # 確認の前に、書き込まないモードで計画だけ算出する。
+        # ドライランと実行は同じ plan_row() を通るため、ここで出る内訳は
+        # 実際の結果と一致する。照合の読み取りだけ行い Backlog は変更しない。
+        planned = new_counts()
         try:
-            confirm_run(sources_cfg, master, assume_yes=args.yes)
+            # 索引は本処理と共有しない。ドライランは「作成予定」を表す
+            # ダミーの issueKey を索引へ入れるため、共有すると本処理が
+            # それを既存課題と誤認し、存在しないキーに対して更新を実行する。
+            planning_index = SummaryIndex(client, master.project_id)
+            with contextlib.redirect_stdout(io.StringIO()):
+                for source_cfg in sources_cfg:
+                    process_source(
+                        source_cfg, client, master, dry_run=True,
+                        completed=completed, summary_index=planning_index,
+                        counts=planned, limit=args.limit,
+                    )
+        except (BacklogAPIError, KeyboardInterrupt):
+            # 事前算出に失敗しても本処理は試みる（そこで改めて報告される）
+            planned = None
+
+        try:
+            confirm_run(sources_cfg, master, assume_yes=args.yes, planned=planned)
         except ConfirmationDeclined as e:
             print(f"\n  {e}", file=sys.stderr)
             sys.exit(1)

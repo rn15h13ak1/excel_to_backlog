@@ -211,3 +211,36 @@ class TestDryRunSummary:
         out = capsys.readouterr().out
         assert "一部フィールド未設定" not in out
         assert "再開スキップ" not in out
+
+
+class TestPlanningIndexIsolation:
+    """
+    ドライランは「作成予定」を表すダミーの issueKey を索引に入れる。
+    これが本処理へ漏れると、存在しないキーに対して更新を実行してしまう
+    （＝課題が作成されない）。索引を共有しないこと。
+    """
+
+    def test_ダミーキーで更新してはいけない(self, source_cfg, master):
+        cfg = source_cfg(["件名"], [["課題A"]],
+                         upsert={"enabled": True, "match_summary": True})
+        backlog = FakeBacklog()
+
+        # 事前算出（ドライラン）→ 本処理、それぞれ別の索引を使う
+        etb.process_source(cfg, backlog, master, dry_run=True,
+                           summary_index=SummaryIndex(backlog, master.project_id))
+        counts = etb.process_source(cfg, backlog, master, dry_run=False,
+                                    summary_index=SummaryIndex(backlog, master.project_id))
+
+        assert counts["created"] == 1
+        assert counts["updated"] == 0
+        assert backlog.updates == []
+
+    def test_ダミーキーは実在しない形式であること(self, source_cfg, master):
+        """万一漏れた場合に、実在の issueKey と取り違えないこと。"""
+        cfg = source_cfg(["件名"], [["同じ件名"], ["同じ件名"]],
+                         upsert={"enabled": True, "match_summary": True})
+        index = SummaryIndex(FakeBacklog(), master.project_id)
+
+        etb.process_source(cfg, FakeBacklog(), master, dry_run=True, summary_index=index)
+
+        assert index.find("同じ件名") == "（作成予定）"      # 明らかにキーではない
