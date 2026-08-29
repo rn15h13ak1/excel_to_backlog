@@ -737,9 +737,9 @@ class IssueMapper:
         """
         ドライラン用に RowPlan の内容を人間が読める形で返す。
 
-        format_preview() と同じ項目を出す。以前の format_dry_run() は
-        statusId と startDate を表示していなかったため、プレビューとドライランで
-        見える情報が食い違っていた。
+        format_preview() と同じ項目を出す。以前あった format_dry_run() は
+        statusId と startDate を表示しておらず、プレビューとドライランで
+        見える情報が食い違っていたため、この関数に統合して置き換えた。
         """
         params = plan.params
         lines = [f"         件名: {params.get('summary', '（なし）')}"]
@@ -765,39 +765,6 @@ class IssueMapper:
         for warning in plan.warnings:
             lines.append(f"         ⚠ {warning}")
 
-        return "\n".join(lines)
-
-    def format_dry_run(
-        self,
-        row: dict[str, str],
-        index: int,
-        formatted_row: dict[str, str] | None = None,
-    ) -> str:
-        """
-        ドライラン用: 変換結果を人間が読みやすい形式で返す。
-        変換に失敗した場合はエラーメッセージを返す。
-        """
-        try:
-            params = self.map_row(row, formatted_row=formatted_row)
-        except ValueError as e:
-            return f"  [{index}] ⚠ スキップ: {e}"
-
-        lines = [f"  [{index}] 件名: {params.get('summary', '（なし）')}"]
-        if "description" in params:
-            # 最初の3行だけ表示
-            desc_lines = params["description"].splitlines()[:3]
-            for dl in desc_lines:
-                lines.append(f"         {dl}")
-            if len(params["description"].splitlines()) > 3:
-                lines.append("         ...")
-        if "dueDate" in params:
-            lines.append(f"         期限日: {params['dueDate']}")
-        if "assigneeId" in params:
-            lines.append(f"         担当者ID: {params['assigneeId']}")
-        # カスタム属性
-        for k, v in params.items():
-            if k.startswith("customField_"):
-                lines.append(f"         {k}: {v}")
         return "\n".join(lines)
 
     def format_preview(
