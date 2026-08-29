@@ -251,7 +251,8 @@ class TestInterruption:
 
         code = main_with("--config", str(workspace.config), "--execute", "--yes")
 
-        assert code == 0
+        # 残りの行は処理されるが、失敗があるため終了コードは 1
+        assert code == 1
         out = capsys.readouterr().out
         assert "作成: 1 件" in out
         assert "エラー: 1 件" in out
@@ -280,3 +281,33 @@ class TestColumnValidation:
 
         assert backlog.create_calls == 0
         assert "ヘッダーに存在しません" in capsys.readouterr().err
+
+
+class TestExitCode:
+    def test_エラーがあれば終了コード_1(self, workspace, monkeypatch):
+        """以前は全行失敗しても 0 で終わっていた。"""
+        instance = FakeBacklog(fail_create_at=1)
+        monkeypatch.setattr(etb, "BacklogClient", lambda *a, **kw: instance)
+
+        assert main_with("--config", str(workspace.config), "--execute", "--yes") == 1
+
+    def test_すべて成功すれば終了コード_0(self, workspace, backlog):
+        assert main_with("--config", str(workspace.config), "--execute", "--yes") == 0
+
+    def test_中断後もそれまでの作成件数がサマリーに出る(
+        self, workspace, backlog, monkeypatch, capsys
+    ):
+        original = backlog.create_issue
+
+        def fail_on_second(params):
+            if backlog.create_calls >= 1:
+                raise BacklogAPIError("認証失敗", status=401, fatal=True)
+            return original(params)
+
+        monkeypatch.setattr(backlog, "create_issue", fail_on_second)
+
+        main_with("--config", str(workspace.config), "--execute", "--yes")
+
+        out = capsys.readouterr().out
+        assert "処理中断" in out
+        assert "作成: 1 件" in out          # 以前は「作成: 0 件」だった

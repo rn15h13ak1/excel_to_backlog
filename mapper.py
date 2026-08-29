@@ -328,6 +328,21 @@ class IssueMapper:
     # 各フィールドの解決
     # ------------------------------------------------------------------
 
+    def resolve_fixed_fields(self) -> None:
+        """
+        全行に共通の設定（種別・優先度）を解決できるか確認する。
+
+        これらは行のデータではなく設定そのものに由来するため、行ごとに
+        判定すると設定のタイプミスが「全行スキップ」というデータ不備の
+        ような報告になる。処理を始める前に一度だけ検証する。
+
+        Raises
+        ------
+        ValueError : 種別名・優先度名が Backlog に存在しない場合
+        """
+        self._resolve_issue_type_id()
+        self._resolve_priority_id()
+
     def _resolve_issue_type_id(self) -> int:
         name = self.cfg.get("issue_type", "")
         if not name:
