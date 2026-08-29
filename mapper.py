@@ -110,7 +110,7 @@ class IssueMapper:
 
     mapping_config キー:
         issue_type          : str        種別名（固定値）
-        priority            : str        優先度名（固定値、デフォルト: "中"）
+        priority            : str        優先度名（固定値・必須。例: "高" / "中" / "低"）
         summary_col         : str        件名として使う列名（summary_template と排他）
         summary_template    : str        件名テンプレート（{{列名}} でセル値を埋め込み、summary_col より優先）
         description_template: str        詳細欄テンプレート（{{列名}} でセル値を埋め込み）
@@ -131,7 +131,6 @@ class IssueMapper:
                                          個別に value_map で変換・items_map で解決し、
                                          複数IDのリストとして渡す（複数選択型 typeId 6・7 向け）。
                                          省略時は分割せず1値として処理。
-              value_map     : dict       Excel 値 → Backlog 値 の変換テーブル（任意）
               value_map     : dict       Excel 値 → Backlog 値 の変換テーブル（任意）
                                          定義した場合は Excel のセル値をテーブルで変換してから Backlog に渡す。
                                          テーブルに存在しない値はスキップ（警告を出力）。
