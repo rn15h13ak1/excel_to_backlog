@@ -26,3 +26,8 @@ run_*.csv
 
 # pytest
 .pytest_cache/
+.coverage
+htmlcov/
+
+# Claude Code の作業用ディレクトリ（git worktree を含む）
+.claude/
