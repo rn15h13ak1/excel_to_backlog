@@ -239,7 +239,8 @@ def apply_filters(
 
 # inject_meta() が行データに注入するキー。Excel の列ではないがテンプレートから
 # 参照できるため、列名検証では既知の名前として扱う。
-META_KEYS = {"_source_name", "_excel_path", "_excel_sheet"}
+# _excel_row は ExcelReader が行データに直接持たせる（inject_meta 経由ではない）
+META_KEYS = {"_source_name", "_excel_path", "_excel_sheet", ExcelReader.ROW_NUMBER_KEY}
 
 
 def collect_referenced_columns(source_cfg: dict) -> list[tuple[str, str]]:
@@ -497,7 +498,8 @@ def generate_preview_for_source(
     # （formatted_rows_all は plain rows と同じ順序・同じ件数）
     plain_row_ids = {id(r): idx for idx, r in enumerate(rows)} if formatted_rows_all else {}
 
-    for i, row in enumerate(filtered_rows, 1):
+    for row in filtered_rows:
+        i = row.get(ExcelReader.ROW_NUMBER_KEY, "?")
         enriched = inject_meta(row, source_cfg)
         if formatted_rows_all is not None:
             orig_idx = plain_row_ids.get(id(row))
@@ -771,7 +773,8 @@ def process_source(
     # ---- ドライラン ----
     if dry_run:
         print(f"\n  [DRY RUN] 以下の課題を作成/更新します:\n")
-        for i, row in enumerate(filtered_rows, 1):
+        for row in filtered_rows:
+            i = row.get(ExcelReader.ROW_NUMBER_KEY, "?")
             fmt_row = get_formatted_row(row)
             enriched = inject_meta(row, source_cfg)
             fmt_enriched = inject_meta(fmt_row, source_cfg) if fmt_row is not None else None
@@ -787,7 +790,10 @@ def process_source(
                 issue_key=issue_key, summary=summary, detail=detail,
             )
 
-    for i, row in enumerate(filtered_rows, 1):
+    for row in filtered_rows:
+        # 表示・ログ・再開判定には Excel シート上の行番号を使う。
+        # フィルタ後の連番ではシートの何行目か辿れず、失敗した行を特定できない。
+        i = row.get(ExcelReader.ROW_NUMBER_KEY, "?")
         fmt_row = get_formatted_row(row)
         enriched = inject_meta(row, source_cfg)
         fmt_enriched = inject_meta(fmt_row, source_cfg) if fmt_row is not None else None

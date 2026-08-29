@@ -72,4 +72,4 @@ class TestStrictRejection:
     def test_通常の_xlsx_は読み込める(self, normal_xlsx):
         headers, rows = ExcelReader({"path": str(normal_xlsx)}).read()
         assert headers == ["件名"]
-        assert rows == [{"件名": "テスト"}]
+        assert rows[0]["件名"] == "テスト"

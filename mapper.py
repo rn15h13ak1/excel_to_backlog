@@ -270,7 +270,8 @@ class IssueMapper:
         elif self.headers:
             cols = self.headers
         else:
-            cols = list(row.keys())
+            # メタキー（_excel_row など）は Excel の列ではないので本文に出さない
+            cols = [k for k in row.keys() if not k.startswith("_")]
 
         parts = []
         for header in cols:

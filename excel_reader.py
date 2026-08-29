@@ -185,6 +185,11 @@ class ExcelReader:
 
     MULTI_HEADER_SEP = " / "  # 複数行ヘッダーの結合区切り文字
 
+    # 各行に Excel シート上の行番号（1 始まり）を持たせるキー。
+    # 画面表示・ログ・再開判定はフィルタ後の連番ではなく実際の行番号を使う。
+    # 連番ではシートの何行目か辿れず、失敗した行を特定できない。
+    ROW_NUMBER_KEY = "_excel_row"
+
     def __init__(self, excel_config: dict):
         self.path = Path(excel_config["path"]).expanduser()
         self.sheet_name: str | None = excel_config.get("sheet")
@@ -420,6 +425,7 @@ class ExcelReader:
                     row_data[headers[i]] = plain
 
             if not is_empty:
+                row_data[self.ROW_NUMBER_KEY] = str(row_idx)
                 rows.append(row_data)
 
         return rows
@@ -462,6 +468,8 @@ class ExcelReader:
                 fmt_data[headers[i]] = cell_to_markdown(cell)
 
             if not is_empty:
+                plain_data[self.ROW_NUMBER_KEY] = str(row_idx)
+                fmt_data[self.ROW_NUMBER_KEY] = str(row_idx)
                 plain_rows.append(plain_data)
                 formatted_rows.append(fmt_data)
 
