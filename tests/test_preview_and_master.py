@@ -94,7 +94,8 @@ class TestGeneratePreview:
         )
 
         assert count == 0
-        assert "Excel 読み込みエラー" in out.read_text(encoding="utf-8")
+        # 読み込み失敗は load_source が共通のメッセージで報告する
+        assert "Excel の読み込みに失敗しました" in out.read_text(encoding="utf-8")
 
     def test_ソースごとにファイルが分かれる(self, source_cfg, master, tmp_path):
         sources = [

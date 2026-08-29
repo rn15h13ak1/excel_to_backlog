@@ -380,6 +380,112 @@ def validate_column_references(source_cfg: dict, headers: list[str]) -> list[str
 
 
 # ------------------------------------------------------------------
+# ソースの読み込み
+# ------------------------------------------------------------------
+
+class SourceLoadError(Exception):
+    """ソースの読み込み・検証に失敗した。message は利用者向けの説明。"""
+
+    def __init__(self, message: str, detail: str = ""):
+        super().__init__(message)
+        self.message = message
+        self.detail = detail
+
+
+@dataclass
+class LoadedSource:
+    """
+    1 ソース分の読み込み結果。
+
+    実処理（process_source）とプレビュー生成（generate_preview_for_source）は
+    同じ手順で Excel を読み、列名を検証し、フィルターを適用し、マッパーを
+    用意する。以前は両者が同じ流れを別々に実装しており、実際に乖離が
+    始まっていた（プレビュー側だけ書式付き行の取得方法が異なる等）。
+    """
+
+    headers: list[str]
+    rows: list[dict]                    # フィルター適用後
+    mapper: IssueMapper
+    formatted_by_row: dict[str, dict]   # {_excel_row: 書式付き行}
+
+    def formatted_for(self, row: dict) -> dict | None:
+        """
+        平文行に対応する書式付き行を返す。rich_text 無効時は None。
+
+        対応付けには Excel の行番号を使う。以前は id(dict) を使っており、
+        フィルターがコピーを返すようになった瞬間に壊れる作りだった。
+        壊れても例外は出ず、本文だけが静かに元テキストへ戻る。
+        """
+        if not self.formatted_by_row:
+            return None
+        return self.formatted_by_row.get(row.get(ExcelReader.ROW_NUMBER_KEY))
+
+
+def load_source(source_cfg: dict, master: BacklogMaster, *, limit: int | None = None) -> LoadedSource:
+    """
+    ソースを読み込み、列名を検証し、フィルターを適用して返す。
+
+    Raises
+    ------
+    SourceLoadError : 読み込み失敗・列名不一致・設定不備のいずれか
+    """
+    import traceback
+
+    excel_cfg = source_cfg.get("excel") or {}
+    mapping_cfg = source_cfg.get("issue_mapping") or {}
+
+    # ---- Excel 読み込み ----
+    try:
+        reader = ExcelReader(excel_cfg)
+        if mapping_cfg.get("rich_text"):
+            headers, rows, formatted_rows = reader.read_with_format()
+        else:
+            headers, rows = reader.read()
+            formatted_rows = None
+    except Exception as e:
+        raise SourceLoadError(
+            f"Excel の読み込みに失敗しました: {e}\n"
+            "  ヒント: Excel ファイルが破損または非標準形式の可能性があります。",
+            detail=traceback.format_exc(),
+        ) from e
+
+    print(f"  読込行数: {len(rows)} 行（フィルター前）")
+
+    # ---- 列名参照の検証 ----
+    # 列名が1つでも一致しないと、フィルター条件が無視されて全行が対象になる、
+    # プレースホルダーが未展開のまま件名になる等の無言の誤動作が起きるため、
+    # 行を処理する前に中止する。
+    errors = validate_column_references(source_cfg, headers)
+    if errors:
+        raise SourceLoadError("\n".join(errors))
+
+    # ---- フィルタリング ----
+    filtered = apply_filters(rows, source_cfg, headers)
+    print(f"  対象行数: {len(filtered)} 行（フィルター後）")
+
+    if limit is not None and len(filtered) > limit:
+        print(f"  → --limit {limit} のため先頭 {limit} 行のみ処理します"
+              f"（残り {len(filtered) - limit} 行は対象外）")
+        filtered = filtered[:limit]
+
+    # ---- マッパー ----
+    mapper = IssueMapper(mapping_cfg, master, headers=headers)
+    # 種別・優先度は全行に共通の設定のため、行ごとではなくここで一度だけ解決する。
+    # 行ごとに判定すると、設定のタイプミスが「全行スキップ」というデータ不備の
+    # ような報告になり、原因が設定だと分からない。
+    try:
+        mapper.resolve_fixed_fields()
+    except ValueError as e:
+        raise SourceLoadError(f"{e}\n  → issue_mapping の設定を確認してください。") from e
+
+    formatted_by_row = (
+        {r.get(ExcelReader.ROW_NUMBER_KEY): r for r in formatted_rows}
+        if formatted_rows is not None else {}
+    )
+    return LoadedSource(headers, filtered, mapper, formatted_by_row)
+
+
+# ------------------------------------------------------------------
 # プレビューファイル生成
 # ------------------------------------------------------------------
 
@@ -458,63 +564,36 @@ def generate_preview_for_source(
     ]
 
     issue_count = 0
-    use_rich_text = bool(mapping_cfg.get("rich_text"))
-
-    # Excel 読み込み
+    # ---- 読み込み・検証・フィルタ（実処理と共通）----
     try:
-        reader = ExcelReader(excel_cfg)
-        if use_rich_text:
-            headers, rows, formatted_rows_all = reader.read_with_format()
-        else:
-            headers, rows = reader.read()
-            formatted_rows_all = None
-    except Exception as e:
-        import traceback
-        lines.append(f"> ⚠ Excel 読み込みエラー: {e}")
+        loaded = load_source(source_cfg, master)
+    except SourceLoadError as e:
+        lines.append(f"> ⚠ {e.message}")
         lines.append("")
-        lines.append("> ヒント: Excelファイルが破損または非標準形式の可能性があります。")
-        lines.append(f"> 詳細: `{traceback.format_exc()}`")
-        lines.append("")
+        if e.detail:
+            lines.append(f"> 詳細: `{e.detail}`")
+            lines.append("")
         output_path.write_text("\n".join(lines), encoding="utf-8")
         return 0
 
-    # 列名参照の検証（process_source と同じ基準で中止する）
-    errors = validate_column_references(source_cfg, headers)
-    if errors:
-        lines.append(f"> ⚠ {errors[0]}")
-        lines.append("")
-        for line in errors[1:]:
-            lines.append(f"> `{line.strip()}`")
-        lines.append("")
-        output_path.write_text("\n".join(lines), encoding="utf-8")
-        return 0
-
-    filtered_rows = apply_filters(rows, source_cfg, headers)
-    lines.append(f"対象行数: **{len(filtered_rows)} 件**（フィルター後）")
+    lines.append(f"対象行数: **{len(loaded.rows)} 件**（フィルター後）")
     lines.append("")
 
-    if not filtered_rows:
+    if not loaded.rows:
         lines.append("_対象行がありません。_")
         lines.append("")
         output_path.write_text("\n".join(lines), encoding="utf-8")
         return 0
 
-    mapper = IssueMapper(mapping_cfg, master, headers=headers)
-
-    # フィルタ後の行インデックスを plain_rows 全体の中から特定する
-    # （formatted_rows_all は plain rows と同じ順序・同じ件数）
-    plain_row_ids = {id(r): idx for idx, r in enumerate(rows)} if formatted_rows_all else {}
-
-    for row in filtered_rows:
+    issue_count = 0
+    for row in loaded.rows:
         i = row.get(ExcelReader.ROW_NUMBER_KEY, "?")
         enriched = inject_meta(row, source_cfg)
-        if formatted_rows_all is not None:
-            orig_idx = plain_row_ids.get(id(row))
-            fmt_row = formatted_rows_all[orig_idx] if orig_idx is not None else None
-            fmt_enriched = inject_meta(fmt_row, source_cfg) if fmt_row is not None else None
-        else:
-            fmt_enriched = None
-        lines.append(mapper.format_preview(enriched, i, master_labels=master_labels, formatted_row=fmt_enriched))
+        fmt_row = loaded.formatted_for(row)
+        fmt_enriched = inject_meta(fmt_row, source_cfg) if fmt_row is not None else None
+        lines.append(loaded.mapper.format_preview(
+            enriched, i, master_labels=master_labels, formatted_row=fmt_enriched
+        ))
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -935,75 +1014,26 @@ def process_source(
     print(f"  シート : {excel_cfg.get('sheet', '（最初のシート）')}")
     print(f"  upsert : {'有効' if upsert_enabled else '無効（常に新規作成）'}")
 
-    use_rich_text = bool(mapping_cfg.get("rich_text"))
-
-    # ---- Excel 読み込み ----
+    # ---- 読み込み・検証・フィルタ（プレビュー生成と共通）----
     try:
-        reader = ExcelReader(excel_cfg)
-        if use_rich_text:
-            headers, rows, formatted_rows_all = reader.read_with_format()
-        else:
-            headers, rows = reader.read()
-            formatted_rows_all = None
-    except Exception as e:
-        import traceback
-        print(f"\n  エラー: Excel の読み込みに失敗しました: {e}", file=sys.stderr)
-        print("  ヒント: Excelファイルが破損または非標準形式の可能性があります。", file=sys.stderr)
-        print("         詳細:", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        loaded = load_source(source_cfg, master, limit=limit)
+    except SourceLoadError as e:
+        print(f"\n  エラー: {e.message}", file=sys.stderr)
+        if e.detail:
+            print(e.detail, file=sys.stderr)
         counts["error"] += 1
         return counts
 
-    print(f"  読込行数: {len(rows)} 行（フィルター前）")
-
-    # ---- 列名参照の検証 ----
-    # 列名が1つでも一致しないと、フィルター条件が無視されて全行が対象になる、
-    # プレースホルダーが未展開のまま件名になる等の無言の誤動作が起きるため、
-    # 行を処理する前に中止する。
-    errors = validate_column_references(source_cfg, headers)
-    if errors:
-        print(f"\n  エラー: {errors[0]}", file=sys.stderr)
-        for line in errors[1:]:
-            print(line, file=sys.stderr)
-        counts["error"] += 1
-        return counts
-
-    # フィルタリング（filters / filter_groups 共通処理）
-    filtered_rows = apply_filters(rows, source_cfg, headers)
-    print(f"  対象行数: {len(filtered_rows)} 行（フィルター後）")
-
-    if limit is not None and len(filtered_rows) > limit:
-        print(f"  → --limit {limit} のため先頭 {limit} 行のみ処理します"
-              f"（残り {len(filtered_rows) - limit} 行は対象外）")
-        filtered_rows = filtered_rows[:limit]
+    filtered_rows = loaded.rows
+    mapper = loaded.mapper
 
     if not filtered_rows:
         print("  → 対象行がないためスキップします。")
         return counts
 
-    # ---- マッパー初期化 ----
-    mapper = IssueMapper(mapping_cfg, master, headers=headers)
-
-    # 種別・優先度は全行に共通の設定のため、行ごとではなくここで一度だけ解決する。
-    # 以前は map_row() の中で解決していたため、設定のタイプミスが「500 行すべて
-    # スキップ」というデータ不備のような報告になり、原因が設定だと分からなかった。
-    try:
-        mapper.resolve_fixed_fields()
-    except ValueError as e:
-        print(f"\n  エラー: {e}", file=sys.stderr)
-        print("  → issue_mapping の設定を確認してください。", file=sys.stderr)
-        counts["error"] += 1
-        return counts
-
-    # フィルタ後の行を plain_rows 全体のインデックスに対応付ける
-    plain_row_ids = {id(r): idx for idx, r in enumerate(rows)} if formatted_rows_all else {}
-
     def get_formatted_row(plain_row: dict) -> dict | None:
         """plain_row に対応する書式付き行を返す。rich_text 無効時は None。"""
-        if formatted_rows_all is None:
-            return None
-        orig_idx = plain_row_ids.get(id(plain_row))
-        return formatted_rows_all[orig_idx] if orig_idx is not None else None
+        return loaded.formatted_for(plain_row)
 
     # ---- ドライラン ----
     # 実行と同じ plan_row() を通すため、作成か更新かまで確認できる。

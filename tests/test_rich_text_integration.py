@@ -212,3 +212,53 @@ class TestPlainFormattedAlignment:
         assert "~~Aの備考~~" in bodies[0]
         assert "~~Bの備考~~" in bodies[1]
         assert all("除外" not in b for b in bodies)
+
+
+class TestFormattedRowLookup:
+    """
+    平文行と書式付き行の対応付けは Excel の行番号で行う。
+    以前は id(dict) を使っており、フィルターがコピーを返すようになった
+    瞬間に壊れる作りだった。壊れても例外は出ず、本文だけが静かに
+    元テキストへ戻るため気づけない。
+    """
+
+    def test_行番号で対応付けられる(self, make_rich_excel, master):
+        path = make_rich_excel(
+            ["件名", "備考"],
+            [["A", [("消えるA", True)]], ["B", [("消えるB", True)]]],
+        )
+        cfg = {
+            "name": "S", "excel": {"path": str(path)},
+            "issue_mapping": {"issue_type": "タスク", "priority": "中",
+                              "summary_col": "件名", "rich_text": True},
+        }
+
+        loaded = etb.load_source(cfg, master)
+
+        for row in loaded.rows:
+            fmt = loaded.formatted_for(row)
+            assert fmt is not None
+            assert fmt[KEY] == row[KEY]              # 同じ行のもの
+            assert f"~~消える{row['件名']}~~" == fmt["備考"]
+
+    def test_コピーされた行でも対応付けられる(self, make_rich_excel, master):
+        """id() ではなく行番号で引くため、別オブジェクトでも解決できる。"""
+        path = make_rich_excel(["件名", "備考"], [["A", [("消える", True)]]])
+        cfg = {
+            "name": "S", "excel": {"path": str(path)},
+            "issue_mapping": {"issue_type": "タスク", "priority": "中",
+                              "summary_col": "件名", "rich_text": True},
+        }
+        loaded = etb.load_source(cfg, master)
+
+        copied = dict(loaded.rows[0])                # 別オブジェクト
+        assert loaded.formatted_for(copied) is loaded.formatted_for(loaded.rows[0])
+
+    def test_rich_text_無効なら_None(self, make_excel, master):
+        cfg = {
+            "name": "S", "excel": {"path": str(make_excel(["件名"], [["A"]]))},
+            "issue_mapping": {"issue_type": "タスク", "priority": "中",
+                              "summary_col": "件名"},
+        }
+        loaded = etb.load_source(cfg, master)
+        assert loaded.formatted_for(loaded.rows[0]) is None
