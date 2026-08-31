@@ -412,26 +412,35 @@ class TestInspectionModes:
     def test_limit_は_1_以上(self, workspace, backlog):
         assert main_with("--config", str(workspace.config), "--limit", "0") == 2
 
-    def test_確認画面に件数が出る(self, workspace, backlog, monkeypatch, capsys):
+    def test_確認画面で件数を事前算出しない(self, workspace, backlog, monkeypatch, capsys):
+        """
+        件数の算出には全行を Backlog と照合する必要があり、行数に比例して
+        「何も起きない待ち時間」が伸びる。処理をすぐ始める。
+        """
         monkeypatch.setattr("builtins.input", lambda _: "y")
 
         main_with("--config", str(workspace.config), "--execute")
 
-        assert "作成予定: 2 件 / 更新予定: 0 件" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "作成予定" not in out
+        assert "更新予定" not in out
 
-    def test_事前算出が失敗しても本処理は試みる(self, workspace, monkeypatch, capsys):
-        """算出時のエラーで実行機会を失わないこと。"""
+    def test_確認画面の前に照合しない(self, workspace, monkeypatch):
+        """
+        書き込みを始める前に Backlog を読みに行かないこと。以前は確認画面の
+        件数を出すために全行を照合しており、待ち時間になっていた。
+        """
         instance = FakeBacklog()
-        calls = {"n": 0}
+        seen = {"before_write": 0}
+
         original = instance.get_issues
 
-        def fail_first(project_id, params=None):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise BacklogAPIError("一時的な失敗", status=500)
+        def counting(project_id, params=None):
+            if instance.create_calls == 0:
+                seen["before_write"] += 1
             return original(project_id, params)
 
-        monkeypatch.setattr(instance, "get_issues", fail_first)
+        monkeypatch.setattr(instance, "get_issues", counting)
         monkeypatch.setattr(etb, "BacklogClient", lambda *a, **kw: instance)
         workspace.write(sources=[{
             "name": "タスク管理表",
@@ -442,7 +451,8 @@ class TestInspectionModes:
 
         main_with("--config", str(workspace.config), "--execute", "--yes")
 
-        assert instance.create_calls > 0
+        # 1 件目の照合（索引の構築）までは行う。全行を先に照合しないこと。
+        assert seen["before_write"] <= 1
 
 
 class TestConfirmCreateOnly:

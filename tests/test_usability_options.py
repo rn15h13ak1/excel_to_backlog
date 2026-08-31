@@ -193,33 +193,28 @@ class TestSummaryDisplay:
 
 
 class TestConfirmRunDisplay:
-    def test_件数が表示される(self, capsys):
-        planned = etb.new_counts()
-        planned.update(created=5, updated=2, unchanged=1, skipped=3)
+    """
+    件数は事前に算出しない。算出には全行を Backlog と照合する必要があり、
+    行数に比例して「何も起きない待ち時間」が伸びるため。
+    """
 
-        etb.confirm_run([{"name": "S"}], None, assume_yes=True, planned=planned)
+    def test_対象ソースを表示する(self, capsys):
+        etb.confirm_run([{"name": "S"}], None, assume_yes=True)
 
         out = capsys.readouterr().out
-        assert "作成予定: 5 件 / 更新予定: 2 件" in out
-        assert "変更なし: 1 件" in out
-        assert "スキップ: 3 件" in out
+        assert "対象ソース: S" in out
+        assert "Backlog への書き込みを開始します" in out
 
-    def test_算出できなかった場合は件数を出さない(self, capsys):
-        etb.confirm_run([{"name": "S"}], None, assume_yes=True, planned=None)
+    def test_件数は表示しない(self, capsys):
+        etb.confirm_run([{"name": "S"}], None, assume_yes=True)
 
         out = capsys.readouterr().out
         assert "作成予定" not in out
-        assert "対象ソース: S" in out
+        assert "更新予定" not in out
 
-    def test_該当のない項目は出さない(self, capsys):
-        planned = etb.new_counts()
-        planned["created"] = 1
-
-        etb.confirm_run([{"name": "S"}], None, assume_yes=True, planned=planned)
-
-        out = capsys.readouterr().out
-        assert "変更なし" not in out
-        assert "再開スキップ" not in out
+    def test_件数の確認方法を案内する(self, capsys):
+        etb.confirm_run([{"name": "S"}], None, assume_yes=True)
+        assert "--execute を付けずに実行すると事前に確認できます" in capsys.readouterr().out
 
 
 class TestListMasterFallbacks:
