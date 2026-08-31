@@ -25,6 +25,7 @@ ISSUE_MAPPING_KEYS = {
     "description_format", "description_template", "description_cols",
     "due_date_col", "start_date_col", "assignee_col", "default_assignee",
     "required_cols", "custom_fields", "status_col", "status_map", "rich_text",
+    "merge_continuation_rows",
 }
 
 CUSTOM_FIELD_KEYS = {"field_name", "col_name", "value_map", "value_separator"}

@@ -48,6 +48,7 @@ from backlog_client import BacklogAPIError, BacklogClient, BacklogNoChangeError
 from config_validation import validate_config_keys
 from excel_reader import ExcelReader, col_letter_to_index
 from mapper import BacklogMaster, IssueMapper
+from row_merge import merge_continuation_rows, single_value_columns
 from run_log import RunLog, completion_key, default_log_path, load_completed
 from summary_index import SummaryIndex
 
@@ -537,6 +538,20 @@ def load_source(source_cfg: dict, master: BacklogMaster, *, limit: int | None = 
         ) from e
 
     print(f"  読込行数: {len(rows)} 行（フィルター前）")
+
+    # ---- 継続行の結合 ----
+    # 1 件の内容が複数行に分かれている表を 1 件にまとめる。
+    # 絞り込みより前に行う。続きの行は絞り込み条件の列も空になっているため、
+    # 先に絞ると結合前に失われてしまう。
+    if mapping_cfg.get("merge_continuation_rows"):
+        before = len(rows)
+        rows = merge_continuation_rows(
+            rows, headers,
+            mapping_cfg.get("required_cols") or [],
+            single_value_columns(source_cfg),
+        )
+        if len(rows) != before:
+            print(f"  継続行を結合: {before} 行 → {len(rows)} 件")
 
     # ---- 列名参照の検証 ----
     # 列名が1つでも一致しないと、フィルター条件が無視されて全行が対象になる、

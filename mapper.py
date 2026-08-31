@@ -297,13 +297,27 @@ class IssueMapper:
             heading = "\n".join(heading_lines)
 
             if plain_value:
-                body = display_value.replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
+                body = self._to_markdown_body(display_value)
             else:
                 body = "（値なし）"
 
             parts.append(f"{heading}\n{body}")
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _to_markdown_body(text: str) -> str:
+        """
+        セル値を本文用の Markdown に変換する。
+
+        セル内の改行は <br> にする（Markdown では改行 1 つが行継続として
+        扱われ、意図した位置で改行されないため）。
+        ただし空行は段落の区切りとして残す。継続行を結合したときの
+        区切りがここに当たる。
+        """
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        paragraphs = normalized.split("\n\n")
+        return "\n\n".join(p.replace("\n", "<br>") for p in paragraphs)
 
     def _ordered_cells(
         self, row: dict[str, str], formatted_row: dict[str, str] | None
