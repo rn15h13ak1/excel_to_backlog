@@ -36,19 +36,19 @@ class TestDuplicateHeaders:
         _, rows = ExcelReader({"path": str(path)}).read()
         assert rows[0]["備考"] == "左の値"
 
-    def test_どの列が無視されるか警告する(self, make_excel, capsys):
+    def test_どの列が同名かを警告する(self, make_excel, capsys):
         path = make_excel(["項番", "備考", "件名", "備考"], [[1, "B", "課題A", "D"]])
         ExcelReader({"path": str(path)}).read()
 
         err = capsys.readouterr().err
         assert "同名のヘッダー" in err
-        assert "B列を使用" in err
-        assert "D列は無視" in err
+        assert "B列とD列" in err
+        assert "B列の値" in err          # 列名で参照したときに使われる列
 
     def test_3つ以上でもすべて警告する(self, make_excel, capsys):
         path = make_excel(["備考"] * 3, [["A", "B", "C"]])
         ExcelReader({"path": str(path)}).read()
-        assert capsys.readouterr().err.count("列は無視") == 2
+        assert capsys.readouterr().err.count("設定で「備考」と書くと") == 2
 
     def test_重複がなければ警告しない(self, make_excel, capsys):
         path = make_excel(["項番", "件名"], [[1, "課題A"]])
@@ -59,8 +59,15 @@ class TestDuplicateHeaders:
         path = make_excel(["項番", "備考", "備考"], [[1, "B", "C"]])
         ExcelReader({"path": str(path), "col_start": "B"}).read()
 
-        err = capsys.readouterr().err
-        assert "B列を使用" in err and "C列は無視" in err
+        assert "B列とC列" in capsys.readouterr().err
+
+    def test_列順の値リストを持たせる(self, make_excel):
+        """同名の列を本文に両方出力するために必要。"""
+        path = make_excel(["備考", "件名", "備考"], [["左", "課題A", "右"]])
+        _, rows = ExcelReader({"path": str(path)}).read()
+
+        assert rows[0][ExcelReader.CELL_VALUES_KEY] == ["左", "課題A", "右"]
+        assert rows[0]["備考"] == "左"          # 列名では左端
 
     def test_前後の空白は除去されるため同名になる(self, make_excel, capsys):
         """

@@ -96,7 +96,7 @@ class TestShowColumns:
         etb.print_source_columns([{"name": "S", "excel": {"path": str(path)}}])
 
         out = capsys.readouterr().out
-        assert "B: 備考  ← 同名のため読み込まれません" in out
+        assert "B: 備考  ← 同名（本文には出力／列名指定は左端）" in out
         assert "(2)" not in out
 
     def test_読み込み失敗は件数として返る(self, tmp_path, capsys):

@@ -190,6 +190,12 @@ class ExcelReader:
     # 連番ではシートの何行目か辿れず、失敗した行を特定できない。
     ROW_NUMBER_KEY = "_excel_row"
 
+    # 列の並び順どおりのセル値リストを持たせるキー。
+    # 行データは {ヘッダー名: 値} の dict のため、同名の列は 1 つしか
+    # 保持できない。本文（description）には両方の列を出力したいので、
+    # ヘッダーと同じ並びの値リストを別に持つ。
+    CELL_VALUES_KEY = "_excel_cells"
+
     def __init__(self, excel_config: dict):
         self.path = Path(excel_config["path"]).expanduser()
         self.sheet_name: str | None = excel_config.get("sheet")
@@ -373,14 +379,17 @@ class ExcelReader:
 
         print(
             f"  ⚠ 同名のヘッダーが {len(shadowed)} 件あります。"
-            f"左端の列だけを使い、右側の列は読み込みません:",
+            f"本文にはすべての列を出力しますが、"
+            f"列名で参照すると左端の列の値になります:",
             file=sys.stderr,
         )
         for name, used, ignored in shadowed:
-            print(f"      「{name}」: {used}列を使用 / {ignored}列は無視",
+            print(f"      「{name}」: {used}列と{ignored}列。"
+                  f"設定で「{name}」と書くと{used}列の値",
                   file=sys.stderr)
         print(
-            "    右側の列も使う場合は、Excel 側でヘッダー名を変えてください。",
+            "    右側の列を個別に参照したい場合は、"
+            "Excel 側でヘッダー名を変えてください。",
             file=sys.stderr,
         )
 
@@ -403,17 +412,20 @@ class ExcelReader:
 
         for row_idx in range(self.data_start_row, max_row + 1):
             row_data = {}
+            values = []
             is_empty = True
             for i, col_idx in enumerate(range(col_start_idx, col_end_idx + 1)):
                 cell = ws.cell(row=row_idx, column=col_idx + 1)
                 plain = cell_to_str(cell.value)
                 if plain:
                     is_empty = False
-                # 同名の列は左端が優先。setdefault で後勝ちを防ぐ
+                values.append(plain)
+                # 列名で参照したときは左端の列を返す（setdefault で後勝ちを防ぐ）
                 row_data.setdefault(headers[i], plain)
 
             if not is_empty:
                 row_data[self.ROW_NUMBER_KEY] = str(row_idx)
+                row_data[self.CELL_VALUES_KEY] = values
                 rows.append(row_data)
 
         return rows
@@ -445,20 +457,26 @@ class ExcelReader:
         for row_idx in range(self.data_start_row, max_row + 1):
             plain_data: dict[str, str] = {}
             fmt_data: dict[str, str] = {}
+            plain_values, fmt_values = [], []
             is_empty = True
 
             for i, col_idx in enumerate(range(col_start_idx, col_end_idx + 1)):
                 cell = ws.cell(row=row_idx, column=col_idx + 1)
                 plain = cell_to_str(cell.value)
+                formatted = cell_to_markdown(cell)
                 if plain:
                     is_empty = False
-                # 同名の列は左端が優先。setdefault で後勝ちを防ぐ
+                plain_values.append(plain)
+                fmt_values.append(formatted)
+                # 列名で参照したときは左端の列を返す（setdefault で後勝ちを防ぐ）
                 plain_data.setdefault(headers[i], plain)
-                fmt_data.setdefault(headers[i], cell_to_markdown(cell))
+                fmt_data.setdefault(headers[i], formatted)
 
             if not is_empty:
                 plain_data[self.ROW_NUMBER_KEY] = str(row_idx)
                 fmt_data[self.ROW_NUMBER_KEY] = str(row_idx)
+                plain_data[self.CELL_VALUES_KEY] = plain_values
+                fmt_data[self.CELL_VALUES_KEY] = fmt_values
                 plain_rows.append(plain_data)
                 formatted_rows.append(fmt_data)
 

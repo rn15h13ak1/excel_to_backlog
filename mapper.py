@@ -272,25 +272,20 @@ class IssueMapper:
             指定された場合、本文の値はこちらから取得する。
             None の場合は row をそのまま使用する。
         """
-        # 出力する列を決定（description_cols 指定 > headers の順序 > row のキー順）
+        # 出力対象を (列名, 平文, 表示用) の並びで組み立てる。
+        #
+        # 行データは {ヘッダー名: 値} の dict のため、同名の列は 1 つしか
+        # 保持できない。本文には両方の列を出したいので、ExcelReader が
+        # 持たせた列順の値リスト（_excel_cells）を優先して使う。
+        cells = self._ordered_cells(row, formatted_row)
+
         specified = self.cfg.get("description_cols")
         if specified:
-            cols = specified
-        elif self.headers:
-            cols = self.headers
-        else:
-            # メタキー（_excel_row など）は Excel の列ではないので本文に出さない
-            cols = [k for k in row.keys() if not k.startswith("_")]
-
-        # 同名の列があると同じ見出しが二度出るため、順序を保って重複を除く
-        # （行データ側は左端の列だけを保持している）
-        cols = list(dict.fromkeys(cols))
+            wanted = set(specified)
+            cells = [c for c in cells if c[0] in wanted]
 
         parts = []
-        for header in cols:
-            if header not in row:
-                continue
-
+        for header, plain_value, display_value in cells:
             # 複数行ヘッダーを " / " で分割して階層見出しを生成
             # 例: "大分類 / 小分類" → "# 大分類\n## 小分類\n"
             levels = [lv.strip() for lv in header.split(" / ")]
@@ -301,11 +296,6 @@ class IssueMapper:
             ]
             heading = "\n".join(heading_lines)
 
-            # 本文の値: formatted_row が渡されていればそちらを使用（書式付き Markdown）
-            # 空値判定はプレーンテキスト（row）で行う
-            plain_value = row.get(header, "")
-            display_value = (formatted_row or row).get(header, "")
-
             if plain_value:
                 body = display_value.replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
             else:
@@ -314,6 +304,35 @@ class IssueMapper:
             parts.append(f"{heading}\n{body}")
 
         return "\n\n".join(parts)
+
+    def _ordered_cells(
+        self, row: dict[str, str], formatted_row: dict[str, str] | None
+    ) -> list[tuple[str, str, str]]:
+        """
+        本文に出力するセルを (列名, 平文, 表示用) の列順リストで返す。
+
+        ExcelReader が付与した列順の値リストがあればそれを使う。
+        同名の列がある場合、dict からは 1 つしか取れないため、
+        この経路でのみ両方の列を出力できる。
+
+        値リストが無い場合（テストで手組みした行など）は dict から組み立てる。
+        """
+        from excel_reader import ExcelReader
+
+        values = row.get(ExcelReader.CELL_VALUES_KEY)
+        if values is not None and len(values) == len(self.headers):
+            display = (formatted_row or {}).get(ExcelReader.CELL_VALUES_KEY) or values
+            if len(display) != len(self.headers):
+                display = values
+            return list(zip(self.headers, values, display))
+
+        # フォールバック: dict のキー順（同名の列は 1 つだけになる）
+        cols = self.headers or [k for k in row if not k.startswith("_")]
+        return [
+            (h, row.get(h, ""), (formatted_row or row).get(h, ""))
+            for h in dict.fromkeys(cols)
+            if h in row
+        ]
 
     # ------------------------------------------------------------------
     # 件名の正規化
