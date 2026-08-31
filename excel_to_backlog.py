@@ -48,7 +48,12 @@ from backlog_client import BacklogAPIError, BacklogClient, BacklogNoChangeError
 from config_validation import validate_config_keys
 from excel_reader import ExcelReader, col_letter_to_index
 from mapper import BacklogMaster, IssueMapper
-from row_merge import merge_continuation_rows, single_value_columns
+from row_merge import (
+    continuation_groups,
+    merge_by_groups,
+    merge_continuation_rows,
+    single_value_columns,
+)
 from run_log import RunLog, completion_key, default_log_path, load_completed
 from summary_index import SummaryIndex
 
@@ -544,11 +549,19 @@ def load_source(source_cfg: dict, master: BacklogMaster, *, limit: int | None = 
     # 絞り込みより前に行う。続きの行は絞り込み条件の列も空になっているため、
     # 先に絞ると結合前に失われてしまう。
     if mapping_cfg.get("merge_continuation_rows"):
-        rows = merge_continuation_rows(
-            rows, headers,
-            mapping_cfg.get("required_cols") or [],
-            single_value_columns(source_cfg),
-        )
+        required_cols = mapping_cfg.get("required_cols") or []
+        single_cols = single_value_columns(source_cfg)
+        # 書式付きの行（rich_text）も同じ区切りで結合する。本文はこちらから
+        # 作るため、結合しないと続きの行の内容が本文にだけ現れない。
+        # 区切りは平文の行で判定する。書式付きは取り消し線が ~~ に変換されて
+        # いるため、そちらで判定すると平文と結果がずれる。
+        if formatted_rows is not None and required_cols:
+            formatted_rows = merge_by_groups(
+                formatted_rows,
+                continuation_groups(rows, required_cols),
+                headers, single_cols, required_cols, warn=False,
+            )
+        rows = merge_continuation_rows(rows, headers, required_cols, single_cols)
 
     # ---- 列名参照の検証 ----
     # 列名が1つでも一致しないと、フィルター条件が無視されて全行が対象になる、

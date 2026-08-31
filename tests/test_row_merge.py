@@ -449,3 +449,69 @@ class TestNoDuplicateJoin:
         )
         body = etb.plan_row(loaded.rows[0], cfg, loaded.mapper).params["description"]
         assert body == "# 枝番\n1\n\n# 対応内容\n手順1\n\n手順2"
+
+
+class TestRichTextMerge:
+    """
+    rich_text 有効時、本文は書式付きの行から作る。こちらも結合しないと
+    続きの行の内容が本文にだけ現れない（ログには結合と出るのに、
+    Markdown は先頭行の内容だけになる）。
+    """
+
+    def _body(self, path, master, **mapping):
+        cfg = {
+            "name": "S",
+            "excel": {"path": str(path)},
+            "issue_mapping": {
+                "issue_type": "タスク", "priority": "中",
+                "summary_template": "{{項番}}", "required_cols": ["項番"],
+                "merge_continuation_rows": True, "rich_text": True,
+                "description_format": "auto", "description_cols": ["対応内容"],
+                **mapping,
+            },
+        }
+        loaded = etb.load_source(cfg, master)
+        assert len(loaded.rows) == 1
+        row = loaded.rows[0]
+        return etb.plan_row(
+            row, cfg, loaded.mapper, formatted_row=loaded.formatted_for(row)
+        ).params["description"]
+
+    def test_書式付きの行も結合される(self, make_rich_excel, master):
+        path = make_rich_excel(
+            ["項番", "対応内容"],
+            [[1, "手順1"], [1, "手順2"], [1, "手順3"]],
+        )
+        assert self._body(path, master) == "# 対応内容\n手順1\n\n手順2\n\n手順3"
+
+    def test_取り消し線を保ったまま結合される(self, make_rich_excel, master):
+        path = make_rich_excel(
+            ["項番", "対応内容"],
+            [
+                [1, [("手順1", False)]],
+                [1, [("済み", True), ("手順2", False)]],
+            ],
+        )
+        body = self._body(path, master)
+
+        assert body == "# 対応内容\n手順1\n\n~~済み~~ 手順2"
+
+    def test_平文と書式付きで結合結果が一致する(self, make_rich_excel, master):
+        """
+        判定は平文の行で行う。書式付きは取り消し線が ~~ に変換されており、
+        そちらで判定すると区切りが平文とずれる恐れがある。
+        """
+        path = make_rich_excel(
+            ["項番", "対応内容"],
+            [[[("1", True)], "手順1"], [[("1", True)], "手順2"]],
+        )
+        assert self._body(path, master) == "# 対応内容\n手順1\n\n手順2"
+
+    def test_連結できない列の警告は二重に出ない(self, make_rich_excel, master, capsys):
+        path = make_rich_excel(
+            ["項番", "件名", "対応内容"],
+            [[1, "課題A", "手順1"], [1, "別の件名", "手順2"]],
+        )
+        self._body(path, master, summary_col="件名", summary_template=None)
+
+        assert capsys.readouterr().err.count("連結できないため無視します") == 1

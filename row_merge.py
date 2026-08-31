@@ -88,20 +88,56 @@ def merge_continuation_rows(
     if not required_cols:
         return rows
 
-    merged: list[dict] = []
-    joined: dict[str, list[str]] = {}      # {先頭行: [続きの行, ...]}
+    groups = continuation_groups(rows, required_cols)
+    merged = merge_by_groups(rows, groups, headers, single_value_cols, required_cols)
 
-    for row in rows:
-        if merged and is_continuation(row, merged[-1], required_cols):
-            _append_into(merged[-1], row, headers, single_value_cols, required_cols)
-            head = merged[-1].get(ExcelReader.ROW_NUMBER_KEY, "?")
-            joined.setdefault(head, []).append(
-                row.get(ExcelReader.ROW_NUMBER_KEY, "?")
-            )
-        else:
-            merged.append(dict(row))
-
+    joined = {                             # {先頭行: [続きの行, ...]}
+        rows[g[0]].get(ExcelReader.ROW_NUMBER_KEY, "?"):
+            [rows[i].get(ExcelReader.ROW_NUMBER_KEY, "?") for i in g[1:]]
+        for g in groups if len(g) > 1
+    }
     _report(rows, merged, joined, required_cols)
+    return merged
+
+
+def continuation_groups(rows: list[dict], required_cols: list[str]) -> list[list[int]]:
+    """
+    1 件にまとめる行の添字をグループごとに返す（先頭行が各グループの先頭）。
+
+    平文の行と書式付きの行（rich_text）を同じ区切りで結合するために、
+    「どう分けるか」だけを取り出している。書式付きの行は取り消し線が ~~ に
+    変換されているため、そちらで判定すると平文と結果がずれる恐れがある。
+    """
+    groups: list[list[int]] = []
+    for i, row in enumerate(rows):
+        if groups and is_continuation(row, rows[groups[-1][0]], required_cols):
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+    return groups
+
+
+def merge_by_groups(
+    rows: list[dict],
+    groups: list[list[int]],
+    headers: list[str],
+    single_value_cols: set[str],
+    key_cols: list[str],
+    *,
+    warn: bool = True,
+) -> list[dict]:
+    """
+    continuation_groups の区切りに従って行を結合する。元の行は変更しない。
+
+    warn=False にすると、連結できない列があっても警告を出さない。
+    平文と書式付きで同じ警告が二重に出るのを避けるため。
+    """
+    merged: list[dict] = []
+    for group in groups:
+        head = dict(rows[group[0]])
+        for i in group[1:]:
+            _append_into(head, rows[i], headers, single_value_cols, key_cols, warn=warn)
+        merged.append(head)
     return merged
 
 
@@ -139,6 +175,8 @@ def _append_into(
     headers: list[str],
     single_value_cols: set[str],
     key_cols: list[str],
+    *,
+    warn: bool = True,
 ) -> None:
     """
     extra の内容を target へ連結する（target を直接更新）。
@@ -162,7 +200,7 @@ def _append_into(
             continue
         target[column] = _join(target.get(column, ""), value)
 
-    if ignored:
+    if ignored and warn:
         print(
             f"  ⚠ {extra_row}行目は{target_row}行目の続きとして扱いますが、"
             f"次の列の値は連結できないため無視します: {'/ '.join(ignored)}",
