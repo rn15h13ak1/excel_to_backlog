@@ -21,21 +21,42 @@ def cfg_for(source_cfg, headers, rows, **mapping):
 
 
 class TestIsContinuation:
-    def test_必須列が空なら継続行(self):
-        assert is_continuation({"件名": "", "対応内容": "続き"}, ["件名"]) is True
+    """
+    判定に使う列が「空」または「直前の行と同じ値」なら継続行。
+    項番などを継続行にも振っている表に対応するため、空欄だけを条件に
+    していない（書式で見えなくしていて目視では空に見えることもある）。
+    """
 
-    def test_必須列に値があれば継続行ではない(self):
-        assert is_continuation({"件名": "課題", "対応内容": "x"}, ["件名"]) is False
+    PREV = {"項番": "1", "件名": "認証改修"}
 
-    def test_空白だけなら継続行(self):
-        assert is_continuation({"件名": "   "}, ["件名"]) is True
+    def test_空欄なら継続行(self):
+        assert is_continuation({"件名": "", "対応内容": "続き"}, self.PREV, ["件名"]) is True
 
-    def test_複数の必須列はすべて空である必要がある(self):
-        row = {"項番": "", "件名": "課題"}
-        assert is_continuation(row, ["項番", "件名"]) is False
+    def test_直前と同じ値なら継続行(self):
+        row = {"項番": "1", "件名": "", "対応内容": "続き"}
+        assert is_continuation(row, self.PREV, ["項番", "件名"]) is True
+
+    def test_同じ値と空欄が混在しても継続行(self):
+        row = {"項番": "1", "件名": "認証改修"}
+        assert is_continuation(row, self.PREV, ["項番", "件名"]) is True
+
+    def test_値が変われば新しい1件(self):
+        row = {"項番": "2", "件名": "表示崩れ"}
+        assert is_continuation(row, self.PREV, ["項番", "件名"]) is False
+
+    def test_一部の列だけ変わっても新しい1件(self):
+        row = {"項番": "2", "件名": ""}
+        assert is_continuation(row, self.PREV, ["項番", "件名"]) is False
+
+    def test_前後の空白は無視して比較する(self):
+        row = {"項番": " 1 ", "件名": ""}
+        assert is_continuation(row, self.PREV, ["項番", "件名"]) is True
+
+    def test_直前の行が無ければ継続行ではない(self):
+        assert is_continuation({"件名": ""}, None, ["件名"]) is False
 
     def test_required_cols_が無ければ結合しない(self):
-        assert is_continuation({"件名": ""}, []) is False
+        assert is_continuation({"件名": ""}, self.PREV, []) is False
 
 
 class TestMerge:
@@ -196,13 +217,14 @@ class TestMergeReport:
         """required_cols の指定が実態と合っていない場合に気づけるように。"""
         cfg = cfg_for(
             source_cfg, ["件名", "対応内容"],
-            [["課題A", "手順1"], ["", "手順2"]],
-            required_cols=["件名", "対応内容"],      # 対応内容は継続行にも値がある
+            [["課題A", "手順1"], ["課題B", "手順2"]],   # 値が毎行変わる
+            required_cols=["件名", "対応内容"],
         )
         etb.load_source(cfg, master)
 
         err = capsys.readouterr().err
         assert "結合対象の行はありません" in err
+        assert "直前の行と同じ値" in err
         assert "件名、対応内容" in err              # 判定に使っている列
 
     def test_複数の課題があれば別々に表示する(self, source_cfg, master, capsys):
@@ -214,3 +236,70 @@ class TestMergeReport:
         out = capsys.readouterr().out
         assert "2行目 ← 3行目" in out
         assert "4行目 ← 5行目" in out
+
+
+class TestRepeatedKeyValue:
+    """
+    項番などを継続行にも振っている表。文字色を変えて見えなくしている
+    ことがあり、目視では空に見えても値が入っている。
+    """
+
+    def test_項番が同じ行は1件にまとまる(self, source_cfg, master):
+        cfg = cfg_for(
+            source_cfg, ["項番", "件名", "対応内容"],
+            [[1, "認証改修", "手順1"], [1, "", "手順2"], [1, "", "手順3"]],
+            required_cols=["項番", "件名"], description_cols=["対応内容"],
+        )
+        loaded = etb.load_source(cfg, master)
+
+        assert len(loaded.rows) == 1
+        body = etb.plan_row(loaded.rows[0], cfg, loaded.mapper).params["description"]
+        assert "手順1\n\n手順2\n\n手順3" in body
+
+    def test_項番が変われば別の1件(self, source_cfg, master):
+        cfg = cfg_for(
+            source_cfg, ["項番", "件名", "対応内容"],
+            [[1, "認証改修", "手順1"], [1, "", "手順2"], [2, "表示崩れ", "別件"]],
+            required_cols=["項番", "件名"], description_cols=["対応内容"],
+        )
+        loaded = etb.load_source(cfg, master)
+
+        assert len(loaded.rows) == 2
+        assert [r["件名"] for r in loaded.rows] == ["認証改修", "表示崩れ"]
+
+    def test_判定に使う列は連結されない(self, source_cfg, master):
+        """
+        同じ値の前提のため、連結すると「1\\n\\n1」となり次の行との比較が壊れる。
+        先頭行の値を保つ。
+        """
+        cfg = cfg_for(
+            source_cfg, ["項番", "件名", "対応内容"],
+            [[1, "認証改修", "手順1"], [1, "", "手順2"], [1, "", "手順3"]],
+            required_cols=["項番", "件名"],
+        )
+        loaded = etb.load_source(cfg, master)
+
+        assert loaded.rows[0]["項番"] == "1"
+        assert loaded.rows[0]["件名"] == "認証改修"
+
+    def test_件名も繰り返されている場合(self, source_cfg, master):
+        cfg = cfg_for(
+            source_cfg, ["項番", "件名", "対応内容"],
+            [[1, "認証改修", "手順1"], [1, "認証改修", "手順2"]],
+            required_cols=["項番", "件名"], description_cols=["対応内容"],
+        )
+        loaded = etb.load_source(cfg, master)
+
+        assert len(loaded.rows) == 1
+
+    def test_本文には判定列を出しても重複しない(self, source_cfg, master):
+        cfg = cfg_for(
+            source_cfg, ["項番", "件名", "対応内容"],
+            [[1, "認証改修", "手順1"], [1, "", "手順2"]],
+            required_cols=["項番", "件名"],
+        )
+        loaded = etb.load_source(cfg, master)
+        body = etb.plan_row(loaded.rows[0], cfg, loaded.mapper).params["description"]
+
+        assert body.count("# 項番") == 1
+        assert "1\n\n1" not in body
