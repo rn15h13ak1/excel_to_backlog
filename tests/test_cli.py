@@ -47,11 +47,16 @@ def workspace(tmp_path, make_excel):
             self.config.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
             return self.config
 
+        @property
+        def output_dir(self):
+            """出力先。設定ファイルと同じ場所ではなく output/ に出る。"""
+            return self.dir / "output"
+
         def run_logs(self):
-            return sorted(self.dir.glob("run_*.csv"))
+            return sorted(self.output_dir.glob("run_*.csv"))
 
         def previews(self):
-            return sorted(self.dir.glob("preview_*.md"))
+            return sorted(self.output_dir.glob("preview_*.md"))
 
     ws = Workspace()
     ws.write()
@@ -533,3 +538,64 @@ class TestConfirmCreateOnly:
         main_with("--config", str(workspace.config), "--execute")
 
         assert "更新は確認せず実行します" in capsys.readouterr().out
+
+
+class TestOutputDir:
+    """
+    プレビューと実行ログは output/ に出す。設定ファイルと同じ場所に出すと
+    実行のたびにファイルが増え、元の Excel や設定ファイルに混ざる。
+    """
+
+    def test_既定では_output_フォルダに出る(self, workspace, backlog):
+        main_with("--config", str(workspace.config), "--execute", "--yes")
+
+        assert len(workspace.run_logs()) == 1
+        assert not list(workspace.dir.glob("run_*.csv"))   # 直下には出ない
+
+    def test_プレビューも_output_フォルダに出る(self, workspace, backlog):
+        main_with("--config", str(workspace.config), "--preview")
+
+        assert len(workspace.previews()) == 1
+        assert not list(workspace.dir.glob("preview_*.md"))
+
+    def test_フォルダが無ければ作られる(self, workspace, backlog):
+        assert not workspace.output_dir.exists()
+
+        main_with("--config", str(workspace.config), "--execute", "--yes")
+
+        assert workspace.output_dir.is_dir()
+
+    def test_設定で変更できる(self, workspace, backlog):
+        workspace.write(output_dir="ログ置き場")
+
+        main_with("--config", str(workspace.config), "--execute", "--yes")
+
+        assert list((workspace.dir / "ログ置き場").glob("run_*.csv"))
+
+    def test_オプションが設定より優先される(self, workspace, backlog, tmp_path):
+        workspace.write(output_dir="設定側")
+        override = tmp_path / "指定側"
+
+        main_with("--config", str(workspace.config), "--execute", "--yes",
+                  "--output-dir", str(override))
+
+        assert list(override.glob("run_*.csv"))
+        assert not (workspace.dir / "設定側").exists()
+
+    def test_相対パスは設定ファイルの場所が基準(self, workspace, backlog, monkeypatch, tmp_path):
+        """
+        実行時のカレントディレクトリで出力先が変わると、同じコマンドでも
+        どこに出たか分からなくなる。
+        """
+        elsewhere = tmp_path / "別の場所"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        main_with("--config", str(workspace.config), "--execute", "--yes")
+
+        assert len(workspace.run_logs()) == 1
+        assert not list(elsewhere.glob("**/run_*.csv"))
+
+    def test_出力先が表示される(self, workspace, backlog, capsys):
+        main_with("--config", str(workspace.config), "--execute", "--yes")
+        assert f"出力先      : {workspace.output_dir}" in capsys.readouterr().out

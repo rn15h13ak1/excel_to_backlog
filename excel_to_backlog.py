@@ -877,6 +877,35 @@ class RowConfirmer:
             print("    y / n / a / q のいずれかを入力してください。")
 
 
+# ------------------------------------------------------------------
+# 出力先フォルダ
+# ------------------------------------------------------------------
+
+DEFAULT_OUTPUT_DIR = "output"
+
+
+def resolve_output_dir(config: dict, config_path: str, override: str | None) -> Path:
+    """
+    プレビューと実行ログの出力先を決め、フォルダを作って返す。
+
+    実行のたびに preview_*.md と run_*.csv が増えるため、設定ファイルと
+    同じ場所に出すと元のファイルに混ざって見分けがつかなくなる。
+
+    優先順位は --output-dir > 設定ファイルの output_dir > 既定（output）。
+    相対パスは設定ファイルのある場所からの相対とする。実行時の
+    カレントディレクトリで出力先が変わると、同じコマンドでも
+    どこに出たか分からなくなるため。
+    """
+    base = Path(config_path).parent
+    value = override or config.get("output_dir") or DEFAULT_OUTPUT_DIR
+    output_dir = Path(value)
+    if not output_dir.is_absolute():
+        output_dir = base / output_dir
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
 def confirm_run(
     sources_cfg: list,
     master: BacklogMaster,
@@ -1498,6 +1527,12 @@ def main():
         help="過去の実行ログ（run_*.csv）を読み、作成・更新済みの行を飛ばして再開する",
     )
     parser.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        help="プレビュー・実行ログの出力先フォルダ"
+             "（既定: 設定ファイルと同じ場所の output/）",
+    )
+    parser.add_argument(
         "--no-log",
         action="store_true",
         help="実行ログ（run_*.csv）を出力しない",
@@ -1550,6 +1585,10 @@ def main():
             )
             sys.exit(1)
 
+    # プレビューと実行ログの出力先。設定ファイルと同じ場所に出すと
+    # 実行のたびにファイルが増えて元のファイルに混ざるため、分けている。
+    output_dir = resolve_output_dir(config, args.config, args.output_dir)
+
     # ヘッダー
     print("=" * 55)
     print("Excel → Backlog 課題登録ツール")
@@ -1557,6 +1596,7 @@ def main():
     print(f"スペース    : {backlog_cfg['space_host']}")
     print(f"プロジェクト : {backlog_cfg['project_key']}")
     print(f"ソース数    : {len(sources_cfg)}")
+    print(f"出力先      : {output_dir}")
     if args.preview:
         print("モード      : PREVIEW（登録内容をMarkdownファイルに出力します）")
     elif dry_run:
@@ -1598,7 +1638,6 @@ def main():
     # --preview モード: Markdown ファイルを生成して終了
     if args.preview:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path(args.config).parent
         print(f"プレビューファイルを生成中...")
         results = generate_preview_file(sources_cfg, master, output_dir, timestamp)
         total_issues = sum(count for _, count in results)
@@ -1624,7 +1663,7 @@ def main():
     log_path = None
     if not dry_run and not args.no_log:
         log_path = default_log_path(
-            Path(args.config).parent, datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir, datetime.now().strftime("%Y%m%d_%H%M%S")
         )
 
     completed = load_completed(args.resume) if args.resume else None

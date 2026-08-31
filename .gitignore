@@ -36,3 +36,6 @@ mutants/
 
 # Claude Code の作業用ディレクトリ（git worktree を含む）
 .claude/
+
+# プレビュー・実行ログの出力先
+output/
