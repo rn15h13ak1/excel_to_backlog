@@ -282,6 +282,10 @@ class IssueMapper:
             # メタキー（_excel_row など）は Excel の列ではないので本文に出さない
             cols = [k for k in row.keys() if not k.startswith("_")]
 
+        # 同名の列があると同じ見出しが二度出るため、順序を保って重複を除く
+        # （行データ側は左端の列だけを保持している）
+        cols = list(dict.fromkeys(cols))
+
         parts = []
         for header in cols:
             if header not in row:

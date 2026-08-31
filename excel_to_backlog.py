@@ -858,8 +858,14 @@ def print_source_columns(sources_cfg: list) -> int:
             continue
 
         start = col_letter_to_index(reader.col_start_str)
+        seen: set[str] = set()
         for i, header in enumerate(headers):
             letter = get_column_letter(start + i + 1)
+            if header in seen:
+                # 同名の列は左端だけが読み込まれる
+                print(f"  {letter:>3}: {header}  ← 同名のため読み込まれません")
+                continue
+            seen.add(header)
             # その列に値が入っている最初の行を例として添える
             sample = next(
                 (r[header] for r in rows if r.get(header)), ""
@@ -872,7 +878,7 @@ def print_source_columns(sources_cfg: list) -> int:
     print()
     print("─" * 55)
     print("  この列名を config.yaml にそのまま記述してください。")
-    print("  複数行ヘッダーは \" / \" で結合され、重複した列には連番が付きます。")
+    print("  複数行ヘッダーは \" / \" で結合されます。同名の列は左端だけが読み込まれます。")
     return failures
 
 

@@ -17,49 +17,69 @@ from excel_reader import ExcelReader, cell_to_markdown, cell_to_str
 # ヘッダーの一意化
 # ------------------------------------------------------------------
 
-class TestUniquifyHeaders:
-    """重複ヘッダーは列の内容を失わせるため、連番で区別する。"""
+class TestDuplicateHeaders:
+    """
+    ヘッダー名は Excel の表記をそのまま使う。連番などは付けない。
+    Excel と見比べたときに名前が食い違うと混乱するため。
 
-    def test_重複がなければそのまま返す(self):
-        assert ExcelReader._uniquify_headers(["項番", "件名"]) == ["項番", "件名"]
+    同名の列は左端だけを使い、右側は読み込まない。黙って捨てると
+    気づけないので、どの列が使われないかを警告する。
+    """
 
-    def test_重複した2つ目に連番が付く(self):
-        assert ExcelReader._uniquify_headers(["備考", "件名", "備考"]) == [
-            "備考", "件名", "備考 (2)"
-        ]
+    def test_ヘッダー名をそのまま返す(self, make_excel):
+        path = make_excel(["備考", "件名", "備考"], [["B", "課題A", "D"]])
+        headers, _ = ExcelReader({"path": str(path)}).read()
+        assert headers == ["備考", "件名", "備考"]      # 連番を付けない
 
-    def test_3つ以上の重複でも連番が続く(self):
-        assert ExcelReader._uniquify_headers(["備考"] * 3) == [
-            "備考", "備考 (2)", "備考 (3)"
-        ]
+    def test_同名の列は左端が使われる(self, make_excel):
+        path = make_excel(["備考", "件名", "備考"], [["左の値", "課題A", "右の値"]])
+        _, rows = ExcelReader({"path": str(path)}).read()
+        assert rows[0]["備考"] == "左の値"
 
-    def test_連番付きの名前が既にあっても衝突しない(self):
-        assert ExcelReader._uniquify_headers(["備考", "備考 (2)", "備考"]) == [
-            "備考", "備考 (2)", "備考 (3)"
-        ]
+    def test_どの列が無視されるか警告する(self, make_excel, capsys):
+        path = make_excel(["項番", "備考", "件名", "備考"], [[1, "B", "課題A", "D"]])
+        ExcelReader({"path": str(path)}).read()
 
-    def test_1つ目は元の名前のまま残る(self):
-        """既存の設定が左端の列を参照し続けられること。"""
-        result = ExcelReader._uniquify_headers(["備考", "備考"])
-        assert result[0] == "備考"
+        err = capsys.readouterr().err
+        assert "同名のヘッダー" in err
+        assert "B列を使用" in err
+        assert "D列は無視" in err
 
+    def test_3つ以上でもすべて警告する(self, make_excel, capsys):
+        path = make_excel(["備考"] * 3, [["A", "B", "C"]])
+        ExcelReader({"path": str(path)}).read()
+        assert capsys.readouterr().err.count("列は無視") == 2
 
-def test_重複ヘッダーでも両方の列の値を読める(tmp_path):
-    """dict の後勝ちで C 列の内容が失われていたバグの回帰テスト。"""
-    wb = Workbook()
-    ws = wb.active
-    for col, header in zip("ABCD", ["項番", "件名", "備考", "備考"]):
-        ws[f"{col}1"] = header
-    ws["A2"], ws["B2"] = 1, "ログイン不具合"
-    ws["C2"], ws["D2"] = "C列の内容", "D列の内容"
-    path = tmp_path / "dup.xlsx"
-    wb.save(path)
+    def test_重複がなければ警告しない(self, make_excel, capsys):
+        path = make_excel(["項番", "件名"], [[1, "課題A"]])
+        ExcelReader({"path": str(path)}).read()
+        assert "同名のヘッダー" not in capsys.readouterr().err
 
-    headers, rows = ExcelReader({"path": str(path)}).read()
+    def test_col_start_を考慮した列記号を出す(self, make_excel, capsys):
+        path = make_excel(["項番", "備考", "備考"], [[1, "B", "C"]])
+        ExcelReader({"path": str(path), "col_start": "B"}).read()
 
-    assert headers == ["項番", "件名", "備考", "備考 (2)"]
-    assert rows[0]["備考"] == "C列の内容"
-    assert rows[0]["備考 (2)"] == "D列の内容"
+        err = capsys.readouterr().err
+        assert "B列を使用" in err and "C列は無視" in err
+
+    def test_前後の空白は除去されるため同名になる(self, make_excel, capsys):
+        """
+        ヘッダーセルの値は cell_to_str が strip する。
+        Excel 上で「備考」と「備考 」に見えても、読み込み後は同名になる。
+        """
+        path = make_excel(["備考", "備考 "], [["左", "右"]])
+        headers, rows = ExcelReader({"path": str(path)}).read()
+
+        assert headers == ["備考", "備考"]
+        assert rows[0]["備考"] == "左"
+        assert "同名のヘッダー" in capsys.readouterr().err
+
+    def test_書式付き行でも左端が優先される(self, make_excel):
+        path = make_excel(["備考", "備考"], [["左", "右"]])
+        _, plain, formatted = ExcelReader({"path": str(path)}).read_with_format()
+
+        assert plain[0]["備考"] == "左"
+        assert formatted[0]["備考"] == "左"
 
 
 # ------------------------------------------------------------------

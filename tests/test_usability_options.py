@@ -91,10 +91,13 @@ class TestShowColumns:
 
         assert "大分類 / 小分類" in capsys.readouterr().out
 
-    def test_重複した列の連番が出る(self, make_excel, capsys):
+    def test_同名の列は読み込まれない旨を出す(self, make_excel, capsys):
         path = make_excel(["備考", "備考"], [["A", "B"]])
         etb.print_source_columns([{"name": "S", "excel": {"path": str(path)}}])
-        assert "備考 (2)" in capsys.readouterr().out
+
+        out = capsys.readouterr().out
+        assert "B: 備考  ← 同名のため読み込まれません" in out
+        assert "(2)" not in out
 
     def test_読み込み失敗は件数として返る(self, tmp_path, capsys):
         failures = etb.print_source_columns(

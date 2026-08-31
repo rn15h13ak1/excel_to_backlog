@@ -322,10 +322,12 @@ class ExcelReader:
         ヘッダー行（header_start_row ～ header_end_row）を読み取り、
         複数行の場合は MULTI_HEADER_SEP で結合したヘッダー名リストを返す。
 
-        ヘッダー名が重複した場合は、2 つ目以降に " (2)" のような連番を付けて
-        一意化する。行データは {ヘッダー名: 値} の dict のため、重複したままでは
-        後ろの列が前の列を上書きして内容が失われる。
-        一意化した場合は警告を出力する（設定側は 1 つ目を元の名前で参照できる）。
+        ヘッダー名は Excel の表記をそのまま使う。連番などは付けない。
+        Excel と見比べたときに名前が食い違うと混乱するため。
+
+        同名の列が複数ある場合は左端の列だけを使い、右側の列は参照できない
+        （行データは {ヘッダー名: 値} の dict のため）。黙って捨てると
+        気づけないので、どの列が使われないかを警告として出力する。
         """
         raw_headers = []
         for col_idx in range(col_start_idx, col_end_idx + 1):
@@ -340,52 +342,47 @@ class ExcelReader:
                 self.MULTI_HEADER_SEP.join(parts) if parts else f"Col{col_idx + 1}"
             )
 
-        return self._uniquify_headers(raw_headers)
+        self._warn_duplicate_headers(raw_headers, col_start_idx)
+        return raw_headers
 
     @staticmethod
-    def _uniquify_headers(raw_headers: list[str]) -> list[str]:
+    def _warn_duplicate_headers(headers: list[str], col_start_idx: int) -> None:
         """
-        重複したヘッダー名に連番を付けて一意化する。
+        同名のヘッダーがあれば、使われない列を列記号付きで警告する。
 
-        ["備考", "件名", "備考"] → ["備考", "件名", "備考 (2)"]
-
-        1 つ目は元の名前のまま残すため、既存の設定は左端の列を参照し続ける。
-        一意化が発生した列は警告として一覧を出力する。
+        行データは {ヘッダー名: 値} の dict のため、同名の列は左端だけが
+        参照可能になる。名前を書き換えて区別する方法もあるが、Excel と
+        見比べたときに食い違うため、名前はそのままにして警告で知らせる。
         """
-        seen: dict[str, int] = {}
-        headers: list[str] = []
-        renamed: list[tuple[str, str]] = []
+        from openpyxl.utils import get_column_letter
 
-        for name in raw_headers:
-            count = seen.get(name, 0) + 1
-            seen[name] = count
-            if count == 1:
-                headers.append(name)
-                continue
-            # 連番付きの名前も既存と衝突しうるため、空くまで進める
-            unique = f"{name} ({count})"
-            while unique in seen:
-                count += 1
-                unique = f"{name} ({count})"
-            seen[name] = count
-            seen[unique] = 1
-            headers.append(unique)
-            renamed.append((name, unique))
+        first_seen: dict[str, int] = {}
+        shadowed: list[tuple[str, str, str]] = []   # (列名, 使う列, 無視する列)
+        for i, name in enumerate(headers):
+            if name in first_seen:
+                shadowed.append((
+                    name,
+                    get_column_letter(col_start_idx + first_seen[name] + 1),
+                    get_column_letter(col_start_idx + i + 1),
+                ))
+            else:
+                first_seen[name] = i
 
-        if renamed:
-            print(
-                f"  ⚠ ヘッダー名が重複しています（{len(renamed)} 件）。"
-                f"内容が失われないよう連番を付けて区別します:",
-                file=sys.stderr,
-            )
-            for original, unique in renamed:
-                print(f"      「{original}」→「{unique}」", file=sys.stderr)
-            print(
-                "    設定から「" + renamed[0][0] + "」を参照すると左端の列が使われます。",
-                file=sys.stderr,
-            )
+        if not shadowed:
+            return
 
-        return headers
+        print(
+            f"  ⚠ 同名のヘッダーが {len(shadowed)} 件あります。"
+            f"左端の列だけを使い、右側の列は読み込みません:",
+            file=sys.stderr,
+        )
+        for name, used, ignored in shadowed:
+            print(f"      「{name}」: {used}列を使用 / {ignored}列は無視",
+                  file=sys.stderr)
+        print(
+            "    右側の列も使う場合は、Excel 側でヘッダー名を変えてください。",
+            file=sys.stderr,
+        )
 
     def _build_rows(
         self,
@@ -412,7 +409,8 @@ class ExcelReader:
                 plain = cell_to_str(cell.value)
                 if plain:
                     is_empty = False
-                row_data[headers[i]] = plain
+                # 同名の列は左端が優先。setdefault で後勝ちを防ぐ
+                row_data.setdefault(headers[i], plain)
 
             if not is_empty:
                 row_data[self.ROW_NUMBER_KEY] = str(row_idx)
@@ -454,8 +452,9 @@ class ExcelReader:
                 plain = cell_to_str(cell.value)
                 if plain:
                     is_empty = False
-                plain_data[headers[i]] = plain
-                fmt_data[headers[i]] = cell_to_markdown(cell)
+                # 同名の列は左端が優先。setdefault で後勝ちを防ぐ
+                plain_data.setdefault(headers[i], plain)
+                fmt_data.setdefault(headers[i], cell_to_markdown(cell))
 
             if not is_empty:
                 plain_data[self.ROW_NUMBER_KEY] = str(row_idx)
