@@ -42,7 +42,7 @@ class TestSummaryIndex:
     def test_件名から_issueKey_を引ける(self):
         client = FakeClient([issue("PROJ-1", "ログイン不具合")])
         index = SummaryIndex(client, project_id=1)
-        assert index.find("ログイン不具合") == "PROJ-1"
+        assert index.find("ログイン不具合")["issueKey"] == "PROJ-1"
 
     def test_存在しない件名は_None(self):
         index = SummaryIndex(FakeClient([issue("PROJ-1", "A")]), project_id=1)
@@ -66,32 +66,32 @@ class TestSummaryIndex:
         """改行やタブを含む既存件名とも一致すること。"""
         client = FakeClient([issue("PROJ-1", "ログイン\n不具合")])
         index = SummaryIndex(client, project_id=1)
-        assert index.find("ログイン不具合") == "PROJ-1"
+        assert index.find("ログイン不具合")["issueKey"] == "PROJ-1"
 
     def test_件名が重複する場合は最初の1件(self, capsys):
         client = FakeClient([issue("PROJ-1", "重複"), issue("PROJ-2", "重複")])
         index = SummaryIndex(client, project_id=1)
-        assert index.find("重複") == "PROJ-1"
+        assert index.find("重複")["issueKey"] == "PROJ-1"
         assert "重複している課題" in capsys.readouterr().err
 
     def test_空の件名は索引に入れない(self):
         client = FakeClient([issue("PROJ-1", ""), issue("PROJ-2", "A")])
         index = SummaryIndex(client, project_id=1)
         assert index.find("") is None
-        assert index.find("A") == "PROJ-2"
+        assert index.find("A")["issueKey"] == "PROJ-2"
 
     def test_作成した課題を索引に追加できる(self):
         client = FakeClient([issue("PROJ-1", "既存")])
         index = SummaryIndex(client, project_id=1)
         index.find("既存")            # 構築させる
-        index.add("新規", "PROJ-9")
-        assert index.find("新規") == "PROJ-9"
+        index.add("新規", {"issueKey": "PROJ-9", "summary": "新規"})
+        assert index.find("新規")["issueKey"] == "PROJ-9"
 
     def test_構築前の_add_は取得を先送りする(self):
         """次の find() の全件取得にその課題も含まれるため、追加は不要。"""
         client = FakeClient([issue("PROJ-1", "A")])
         index = SummaryIndex(client, project_id=1)
-        index.add("新規", "PROJ-9")
+        index.add("新規", {"issueKey": "PROJ-9", "summary": "新規"})
         assert client.get_issues_calls == 0
 
 

@@ -121,10 +121,12 @@ def find_existing_issue(
     params: dict,
     master: BacklogMaster,
     summary_index: SummaryIndex | None = None,
-) -> str | None:
+) -> dict | None:
     """
-    upsert 設定に従い既存課題の issueKey を返す。
-    見つからない場合は None を返す。
+    upsert 設定に従い既存課題を返す（見つからない場合は None）。
+
+    issueKey だけでなく課題そのものを返す。更新前に「本当に変わるのか」を
+    比較するために、現在の値が必要なため。
 
     upsert_cfg キー:
         key_col       : str  Excel の列名（issueKey が記入されている列）
@@ -137,7 +139,7 @@ def find_existing_issue(
         if issue_key:
             existing = client.get_issue(issue_key)
             if existing:
-                return existing["issueKey"]
+                return existing
             # key_col に値はあるが Backlog に存在しない → 新規作成
             print(
                 f"    ℹ issueKey「{issue_key}」は Backlog に存在しません → 新規作成",
@@ -154,6 +156,91 @@ def find_existing_issue(
             return summary_index.find(summary)
 
     return None
+
+
+# ------------------------------------------------------------------
+# 更新内容の差分判定
+# ------------------------------------------------------------------
+
+def _existing_value(issue: dict, key: str):
+    """
+    Backlog の課題オブジェクトから、送信パラメータ key に対応する現在値を返す。
+
+    比較できない項目は None ではなく _UNKNOWN を返し、呼び出し元が
+    「変更あり」に倒せるようにする。
+    """
+    if key == "summary":
+        return IssueMapper.normalize_summary(issue.get("summary") or "")
+    if key == "description":
+        return issue.get("description") or ""
+    if key in ("dueDate", "startDate"):
+        # "2025-01-05T00:00:00Z" のような形式で返ることがあるため日付部分だけ見る
+        value = issue.get(key)
+        return str(value)[:10] if value else ""
+    if key == "assigneeId":
+        return (issue.get("assignee") or {}).get("id")
+    if key == "statusId":
+        return (issue.get("status") or {}).get("id")
+    if key == "issueTypeId":
+        return (issue.get("issueType") or {}).get("id")
+    if key == "priorityId":
+        return (issue.get("priority") or {}).get("id")
+    if key.startswith("customField_"):
+        field_id = int(key.removeprefix("customField_"))
+        for cf in issue.get("customFields") or []:
+            if cf.get("id") == field_id:
+                value = cf.get("value")
+                if isinstance(value, dict):
+                    return value.get("id")
+                if isinstance(value, list):
+                    return sorted(
+                        v.get("id") if isinstance(v, dict) else v for v in value
+                    )
+                return value
+        return None
+    return _UNKNOWN
+
+
+class _Unknown:
+    """比較できないことを表す番兵。None（値なし）と区別する。"""
+
+    def __repr__(self) -> str:
+        return "<比較不可>"
+
+
+_UNKNOWN = _Unknown()
+
+
+def has_changes(params: dict, issue: dict) -> bool:
+    """
+    送信予定の params が、既存課題 issue に対して変更をもたらすか判定する。
+
+    Backlog は「変更が無く、コメントも無い」更新に対して
+    "No comment content." (code=7) を返す。実際に PATCH を投げるまで
+    分からなかったが、既存課題は照合の時点で取得済みのため、
+    事前に比較できる。
+
+    判定できない項目が 1 つでもあれば True（変更あり）を返す。
+    誤って「変更なし」と判断して更新を飛ばすより、余分に PATCH を
+    投げるほうが安全なため。
+    """
+    for key, new_value in params.items():
+        if key == "projectId":
+            continue
+        current = _existing_value(issue, key)
+        if current is _UNKNOWN:
+            return True
+        if key == "summary":
+            if IssueMapper.normalize_summary(str(new_value)) != current:
+                return True
+            continue
+        if isinstance(new_value, list):
+            if sorted(new_value) != (sorted(current) if isinstance(current, list) else current):
+                return True
+            continue
+        if str(new_value) != ("" if current is None else str(current)):
+            return True
+    return False
 
 
 # ------------------------------------------------------------------
@@ -961,20 +1048,25 @@ class RowPlan:
     action:
         "create"  新規作成する
         "update"  existing_key の課題を更新する
-        "skip"    処理しない（必須列が空・件名が空など）
-        "resume"  前回の実行で完了済みのため飛ばす
+        "skip"      処理しない（必須列が空・件名が空など）
+        "resume"    前回の実行で完了済みのため飛ばす
+        "unchanged" 既存課題と内容が同じで、更新しても変わらない
     """
 
     row_number: str                     # Excel シート上の行番号
     action: str
     params: dict = field(default_factory=dict)
-    existing_key: str | None = None
+    existing: dict | None = None        # 既存課題（更新・変更なしの場合）
     warnings: list[str] = field(default_factory=list)
     reason: str = ""                    # skip の理由
 
     @property
     def summary(self) -> str:
         return self.params.get("summary", "")
+
+    @property
+    def existing_key(self) -> str | None:
+        return (self.existing or {}).get("issueKey")
 
 
 def plan_row(
@@ -1017,17 +1109,26 @@ def plan_row(
         return RowPlan(row_number=row_number, action="resume", params=params,
                        warnings=warnings)
 
-    existing_key = None
+    existing = None
     if upsert_cfg.get("enabled", False) and client is not None and master is not None:
-        existing_key = find_existing_issue(
+        existing = find_existing_issue(
             client, upsert_cfg, enriched, params, master, summary_index=summary_index
         )
 
+    if existing is None:
+        action = "create"
+    elif has_changes(params, existing):
+        action = "update"
+    else:
+        # 既存課題と内容が同じ。PATCH を投げても Backlog が
+        # "No comment content." を返すだけなので、送らずに済ませる。
+        action = "unchanged"
+
     return RowPlan(
         row_number=row_number,
-        action="update" if existing_key else "create",
+        action=action,
         params=params,
-        existing_key=existing_key,
+        existing=existing,
         warnings=warnings,
     )
 
@@ -1129,6 +1230,11 @@ def process_source(
                 counts["resumed"] += 1
                 continue
 
+            if plan.action == "unchanged":
+                print(f"  [{i}] 変更なし（{plan.existing_key}）")
+                counts["unchanged"] += 1
+                continue
+
             if plan.action == "update":
                 print(f"  [{i}] 更新 → {plan.existing_key}")
                 counts["updated"] += 1
@@ -1139,7 +1245,12 @@ def process_source(
                 # 「更新」になる。ドライランでも同じ判断になるよう、作成予定の
                 # 件名を索引に入れておく（Backlog へは書き込まない）。
                 if summary_index is not None:
-                    summary_index.add(plan.summary, "（作成予定）")
+                    # 実行時と同じく索引へ加える。実在しないことが分かる
+                    # issueKey にして、万一表示されても取り違えないようにする。
+                    summary_index.add(plan.summary, {
+                        "issueKey": "（この実行で作成予定）",
+                        "summary": plan.summary,
+                    })
             if plan.warnings:
                 counts["partial"] += 1
 
@@ -1197,6 +1308,19 @@ def process_source(
                 api_called = False          # 照合より前に判定するため通信していない
                 continue
 
+            if plan.action == "unchanged":
+                # 内容が同じ。PATCH を投げても Backlog が
+                # "No comment content." を返すだけなので送らない。
+                # 確認も求めない（判断することが無いため）。
+                print(f"  [{i}] — 変更なし: {plan.existing_key} — {plan.summary}")
+                counts["unchanged"] += 1
+                if row_warnings:
+                    counts["partial"] += 1
+                log(row=i, action="unchanged", issue_key=plan.existing_key,
+                    summary=plan.summary, detail=" / ".join(row_warnings))
+                api_called = False
+                continue
+
             # 書き込む直前に 1 行ずつ確認する。
             # まとめて一気に書き込むと、件数が多いときに何が起きたのか
             # 把握しきれないため、作成・更新のどちらも都度確認する。
@@ -1242,7 +1366,7 @@ def process_source(
                     log(row=i, action="created", issue_key=issue["issueKey"],
                         summary=issue["summary"], detail=" / ".join(row_warnings))
                     if summary_index is not None:
-                        summary_index.add(issue["summary"], issue["issueKey"])
+                        summary_index.add(issue["summary"], issue)
                 except StatusUpdateFailed as e:
                     # 課題は作成済み。issueKey を必ず表示する（Backlog 上に
                     # 取り残されたことに気づけないと重複作成につながる）
@@ -1255,7 +1379,7 @@ def process_source(
                     counts["created"] += 1
                     counts["status_failed"] += 1
                     if summary_index is not None:
-                        summary_index.add(issue["summary"], issue["issueKey"])
+                        summary_index.add(issue["summary"], issue)
                     if row_warnings:
                         counts["partial"] += 1
                     log(row=i, action="created_status_failed",

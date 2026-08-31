@@ -29,16 +29,18 @@ class SummaryIndex:
     def __init__(self, client, project_id: int):
         self.client = client
         self.project_id = project_id
-        self._index: dict[str, str] | None = None
+        # {正規化件名: 課題そのもの}。issueKey だけでなく全項目を保持する。
+        # 更新前に「本当に変わるのか」を比較するために必要。
+        self._index: dict[str, dict] | None = None
 
     # ------------------------------------------------------------------
 
-    def _build(self) -> dict[str, str]:
-        """全課題を取得して {正規化件名: issueKey} を作る。"""
+    def _build(self) -> dict[str, dict]:
+        """全課題を取得して {正規化件名: 課題} を作る。"""
         print("  既存課題を取得して件名の索引を作成中...")
         issues = self.client.get_issues(self.project_id)
 
-        index: dict[str, str] = {}
+        index: dict[str, dict] = {}
         duplicates: dict[str, int] = {}
         for issue in issues:
             key = IssueMapper.normalize_summary(issue.get("summary", ""))
@@ -49,7 +51,7 @@ class SummaryIndex:
                 # 以前の検索方式も候補の先頭を採用していたため挙動は変わらない。
                 duplicates[key] = duplicates.get(key, 1) + 1
                 continue
-            index[key] = issue["issueKey"]
+            index[key] = issue
 
         print(f"    {len(issues)} 件の課題から {len(index)} 件の件名を索引化しました")
         if duplicates:
@@ -59,7 +61,8 @@ class SummaryIndex:
                 file=sys.stderr,
             )
             for summary, count in list(duplicates.items())[:5]:
-                print(f"      「{summary}」（{count} 件）→ {index[summary]}", file=sys.stderr)
+                print(f"      「{summary}」（{count} 件）→ {index[summary]['issueKey']}",
+                      file=sys.stderr)
             if len(duplicates) > 5:
                 print(f"      ...他 {len(duplicates) - 5} 種類", file=sys.stderr)
 
@@ -67,9 +70,9 @@ class SummaryIndex:
 
     # ------------------------------------------------------------------
 
-    def find(self, summary: str) -> str | None:
+    def find(self, summary: str) -> dict | None:
         """
-        正規化済みの件名に一致する既存課題の issueKey を返す。
+        正規化済みの件名に一致する既存課題を返す（見つからなければ None）。
 
         summary は map_row() で normalize_summary() 済みの文字列を渡すこと。
         索引側も同じ正規化を適用しているため表記の揺れを吸収できる。
@@ -78,7 +81,7 @@ class SummaryIndex:
             self._index = self._build()
         return self._index.get(summary)
 
-    def add(self, summary: str, issue_key: str) -> None:
+    def add(self, summary: str, issue: dict) -> None:
         """
         実行中に作成した課題を索引へ加える。
 
@@ -93,4 +96,4 @@ class SummaryIndex:
             return
         key = IssueMapper.normalize_summary(summary)
         if key:
-            self._index.setdefault(key, issue_key)
+            self._index.setdefault(key, issue)

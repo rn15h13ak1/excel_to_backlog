@@ -243,4 +243,4 @@ class TestPlanningIndexIsolation:
 
         etb.process_source(cfg, FakeBacklog(), master, dry_run=True, summary_index=index)
 
-        assert index.find("同じ件名") == "（作成予定）"      # 明らかにキーではない
+        assert index.find("同じ件名")["issueKey"] == "（この実行で作成予定）"
