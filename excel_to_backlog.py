@@ -544,14 +544,11 @@ def load_source(source_cfg: dict, master: BacklogMaster, *, limit: int | None = 
     # 絞り込みより前に行う。続きの行は絞り込み条件の列も空になっているため、
     # 先に絞ると結合前に失われてしまう。
     if mapping_cfg.get("merge_continuation_rows"):
-        before = len(rows)
         rows = merge_continuation_rows(
             rows, headers,
             mapping_cfg.get("required_cols") or [],
             single_value_columns(source_cfg),
         )
-        if len(rows) != before:
-            print(f"  継続行を結合: {before} 行 → {len(rows)} 件")
 
     # ---- 列名参照の検証 ----
     # 列名が1つでも一致しないと、フィルター条件が無視されて全行が対象になる、

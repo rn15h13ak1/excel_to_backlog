@@ -175,3 +175,42 @@ class TestMergeBeforeFilter:
         assert len(loaded.rows) == 1
         body = etb.plan_row(loaded.rows[0], cfg, loaded.mapper).params["description"]
         assert "手順1" in body and "手順2" in body
+
+
+class TestMergeReport:
+    """
+    件数だけでは「なぜ結合されなかったのか」が分からないため、
+    どの行がどこへ結合されたかと、結合されなかった場合の判定条件を示す。
+    """
+
+    def test_結合された対応関係を表示する(self, source_cfg, master, capsys):
+        cfg = cfg_for(source_cfg, ["件名", "対応内容"],
+                      [["課題A", "手順1"], ["", "手順2"], ["", "手順3"]])
+        etb.load_source(cfg, master)
+
+        out = capsys.readouterr().out
+        assert "継続行を結合: 3 行 → 1 件" in out
+        assert "2行目 ← 3行目、4行目" in out
+
+    def test_結合対象が無ければ判定条件を示す(self, source_cfg, master, capsys):
+        """required_cols の指定が実態と合っていない場合に気づけるように。"""
+        cfg = cfg_for(
+            source_cfg, ["件名", "対応内容"],
+            [["課題A", "手順1"], ["", "手順2"]],
+            required_cols=["件名", "対応内容"],      # 対応内容は継続行にも値がある
+        )
+        etb.load_source(cfg, master)
+
+        err = capsys.readouterr().err
+        assert "結合対象の行はありません" in err
+        assert "件名、対応内容" in err              # 判定に使っている列
+
+    def test_複数の課題があれば別々に表示する(self, source_cfg, master, capsys):
+        cfg = cfg_for(source_cfg, ["件名", "対応内容"],
+                      [["課題A", "手順1"], ["", "手順2"],
+                       ["課題B", "別件1"], ["", "別件2"]])
+        etb.load_source(cfg, master)
+
+        out = capsys.readouterr().out
+        assert "2行目 ← 3行目" in out
+        assert "4行目 ← 5行目" in out

@@ -63,13 +63,47 @@ def merge_continuation_rows(
         return rows
 
     merged: list[dict] = []
+    joined: dict[str, list[str]] = {}      # {先頭行: [続きの行, ...]}
+
     for row in rows:
         if merged and is_continuation(row, required_cols):
             _append_into(merged[-1], row, headers, single_value_cols)
+            head = merged[-1].get(ExcelReader.ROW_NUMBER_KEY, "?")
+            joined.setdefault(head, []).append(
+                row.get(ExcelReader.ROW_NUMBER_KEY, "?")
+            )
         else:
             merged.append(dict(row))
 
+    _report(rows, merged, joined, required_cols)
     return merged
+
+
+def _report(
+    rows: list[dict],
+    merged: list[dict],
+    joined: dict[str, list[str]],
+    required_cols: list[str],
+) -> None:
+    """
+    どの行がどこへ結合されたかを表示する。
+
+    件数だけでは「なぜ結合されなかったのか」が分からないため、
+    対応関係と判定条件を示す。
+    """
+    if joined:
+        print(f"  継続行を結合: {len(rows)} 行 → {len(merged)} 件")
+        for head, tail in joined.items():
+            print(f"      {head}行目 ← {'、'.join(t + '行目' for t in tail)}")
+        return
+
+    print(
+        f"  ℹ merge_continuation_rows が有効ですが、結合対象の行はありません"
+        f"（{len(rows)} 行）。\n"
+        f"    継続行と判定するのは、次の列がすべて空の行です: "
+        f"{'、'.join(required_cols)}",
+        file=sys.stderr,
+    )
 
 
 def _append_into(
