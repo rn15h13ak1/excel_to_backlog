@@ -115,3 +115,33 @@ class TestBasePath:
     def test_未指定なら付かない(self):
         c = BacklogClient("example.com", "k")
         assert c.base_url == "https://example.com/api/v2"
+
+
+class TestNoCommentContent:
+    """
+    Backlog は「更新内容が無く、コメントも無い」PATCH に対して
+    "No comment content." (code=7) を返す。実質的な「変更なし」であり、
+    エラーとして扱うと更新のたびに失敗として計上されてしまう。
+    実運用で最初に確認できた文言。
+    """
+
+    def test_変更なしとして扱う(self, client):
+        with pytest.raises(BacklogNoChangeError):
+            client._handle_http_error(
+                http_error(400, "No comment content.", code=7),
+                "/issues/DEMO-1", raise_no_change=True,
+            )
+
+    def test_日本語の表現も扱う(self, client):
+        with pytest.raises(BacklogNoChangeError):
+            client._handle_http_error(
+                http_error(400, "コメントが入力されていません", code=7),
+                "/issues/DEMO-1", raise_no_change=True,
+            )
+
+    def test_作成時は変更なし扱いにしない(self, client):
+        """POST では raise_no_change=False のため、常にエラー。"""
+        with pytest.raises(BacklogAPIError):
+            client._handle_http_error(
+                http_error(400, "No comment content.", code=7), "/issues"
+            )
