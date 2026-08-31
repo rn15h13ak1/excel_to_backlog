@@ -19,6 +19,9 @@ required_cols が空になっている。そのままでは必須列が空の行
     書式で文字色を変えて見えなくしている場合もあり、目視では空に見えても
     値が入っていることがある。
 
+    判定に使わない列にも 1 件を通して同じ値を振っている表（枝番など）が
+    あるため、連結時にすでに同じ値があれば重複させない。
+
 結合は絞り込み（filters）より前に行う。続きの行は絞り込み条件の列も
 空になっているため、先に絞ると結合前に失われてしまう。
 """
@@ -75,6 +78,9 @@ def merge_continuation_rows(
         1 件につき 1 つの値しか持てない列（件名・期限日・担当者・
         ステータス・カスタム属性など）。ここに続きの行が値を持っていても
         連結できないため、警告して無視する。
+
+    それ以外の列は空でない値を連結するが、すでに同じ値があれば連結しない
+    （枝番など、1 件を通して同じ値を振っている列を重複させないため）。
 
     元の行は変更しない。結合後の行の _excel_row は先頭行の番号を保つ
     （実行ログや画面表示から Excel を辿れるようにするため）。
@@ -154,8 +160,7 @@ def _append_into(
             # 1 件につき 1 つしか持てない列は連結できない
             ignored.append(column)
             continue
-        current = target.get(column, "")
-        target[column] = f"{current}{JOIN_SEPARATOR}{value}" if current else value
+        target[column] = _join(target.get(column, ""), value)
 
     if ignored:
         print(
@@ -191,8 +196,28 @@ def _merge_cell_values(
         value = str(value).strip()
         if not value or headers[i] in single_value_cols or headers[i] in key_cols:
             continue
-        values[i] = f"{values[i]}{JOIN_SEPARATOR}{value}" if values[i] else value
+        values[i] = _join(values[i], value)
     target[key] = values
+
+
+def _join(current, value: str) -> str:
+    """
+    current に value をつなぐ。すでに同じ値があれば、つながずそのまま返す。
+
+    判定に使わない列（枝番など）にも 1 件を通して同じ値を振っている表があり、
+    そのまま連結すると「1\\n\\n1\\n\\n1」となる。件名テンプレートに使えば
+    「1-111」のような値になり、既存課題とも照合できなくなる。
+
+    required_cols のように列を指定してもらう方法は採らない。どの列が
+    繰り返しなのかは表ごとに異なり、設定漏れが起きたときに気づきにくいため、
+    値が同じかどうかで機械的に判断する。
+    """
+    current = str(current or "")
+    if not current:
+        return value
+    if value in [part.strip() for part in current.split(JOIN_SEPARATOR)]:
+        return current                    # すでに同じ値がある。重複させない
+    return f"{current}{JOIN_SEPARATOR}{value}"
 
 
 def single_value_columns(source_cfg: dict) -> set[str]:

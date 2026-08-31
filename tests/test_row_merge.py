@@ -389,3 +389,63 @@ class TestNoExcessBlankLines:
             [1, "A", "手順1\n"], [1, "", "手順2"],
         ])
         assert "\n\n\n" not in body
+
+
+class TestNoDuplicateJoin:
+    """
+    判定に使わない列に同じ値が繰り返し入っていても重複させない。
+
+    項番を required_cols に、枝番を入れていない表がある。枝番は 1 件を
+    通して同じ値なので、そのまま連結すると「1\n\n1\n\n1」となり、
+    件名テンプレートに使うと「1-111」になってしまう。
+    """
+
+    def _row(self, source_cfg, master, rows, **mapping):
+        mapping.setdefault("description_cols", ["対応内容"])
+        mapping.setdefault("summary_template", "{{項番}}-{{枝番}}")
+        cfg = cfg_for(
+            source_cfg, ["項番", "枝番", "対応内容"], rows,
+            required_cols=["項番"], summary_col=None, **mapping,
+        )
+        loaded = etb.load_source(cfg, master)
+        assert len(loaded.rows) == 1
+        return loaded, cfg
+
+    def test_同じ値は連結されない(self, source_cfg, master):
+        loaded, _ = self._row(source_cfg, master, [
+            [1, 1, "手順1"], [1, 1, "手順2"], [1, 1, "手順3"],
+        ])
+        assert loaded.rows[0]["枝番"] == "1"
+        assert loaded.rows[0]["対応内容"] == "手順1\n\n手順2\n\n手順3"
+
+    def test_値が異なれば連結される(self, source_cfg, master):
+        loaded, _ = self._row(source_cfg, master, [
+            [1, 1, "手順1"], [1, 2, "手順2"],
+        ])
+        assert loaded.rows[0]["枝番"] == "1\n\n2"
+
+    def test_同じ値が飛び飛びでも重複しない(self, source_cfg, master):
+        loaded, _ = self._row(source_cfg, master, [
+            [1, "A", "手順1"], [1, "B", "手順2"], [1, "A", "手順3"],
+        ])
+        assert loaded.rows[0]["枝番"] == "A\n\nB"
+
+    def test_件名テンプレートが壊れない(self, source_cfg, master):
+        """1-111 ではなく 1-1 になる。既存課題との照合も保たれる。"""
+        loaded, cfg = self._row(
+            source_cfg, master,
+            [[1, 1, "手順1"], [1, 1, "手順2"], [1, 1, "手順3"]],
+            summary_template="{{項番}}-{{枝番}}",
+        )
+        plan = etb.plan_row(loaded.rows[0], cfg, loaded.mapper)
+        assert plan.params["summary"] == "1-1"
+
+    def test_本文にも重複して出ない(self, source_cfg, master):
+        """本文用の列順の値リストにも同じ規則が効くこと。"""
+        loaded, cfg = self._row(
+            source_cfg, master,
+            [[1, 1, "手順1"], [1, 1, "手順2"]],
+            description_cols=["枝番", "対応内容"],
+        )
+        body = etb.plan_row(loaded.rows[0], cfg, loaded.mapper).params["description"]
+        assert body == "# 枝番\n1\n\n# 対応内容\n手順1\n\n手順2"
