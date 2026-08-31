@@ -443,3 +443,83 @@ class TestInspectionModes:
         main_with("--config", str(workspace.config), "--execute", "--yes")
 
         assert instance.create_calls > 0
+
+
+class TestConfirmCreateOnly:
+    """
+    確認するのは新規作成のみ。更新は確認せずに実行する。
+    課題が増えるのは新規作成のときだけであり、更新まで都度確認すると
+    件数が多くなって判断が鈍るため。
+    """
+
+    def _tty(self, monkeypatch):
+        monkeypatch.setattr("sys.stdin", type("T", (), {"isatty": lambda s: True})())
+
+    def test_更新は確認されない(self, workspace, monkeypatch, capsys):
+        instance = FakeBacklog({"DEMO-1": "課題A", "DEMO-2": "課題B"})
+        monkeypatch.setattr(etb, "BacklogClient", lambda *a, **kw: instance)
+        self._tty(monkeypatch)
+
+        def no_input(_):
+            raise AssertionError("更新で確認を求めてはいけない")
+
+        monkeypatch.setattr("builtins.input", no_input)
+        workspace.write(sources=[{
+            "name": "タスク管理表",
+            "excel": {"path": str(next(workspace.dir.glob("*.xlsx")))},
+            "issue_mapping": {"issue_type": "タスク", "priority": "中",
+                              "summary_col": "件名", "due_date_col": "Backlog番号"},
+            "upsert": {"enabled": True, "match_summary": True},
+        }])
+
+        main_with("--config", str(workspace.config), "--execute")
+
+        assert len(instance.updates) == 2          # 確認なしで更新される
+
+    def test_新規作成は確認される(self, workspace, backlog, monkeypatch):
+        self._tty(monkeypatch)
+        asked = {"n": 0}
+
+        def count(_):
+            asked["n"] += 1
+            return "y"
+
+        monkeypatch.setattr("builtins.input", count)
+        main_with("--config", str(workspace.config), "--execute")
+
+        assert asked["n"] == 2                     # 2 件とも確認された
+        assert backlog.create_calls == 2
+
+    def test_作成と更新が混在する場合(self, workspace, monkeypatch):
+        """作成だけ確認され、更新はそのまま実行される。"""
+        instance = FakeBacklog({"DEMO-1": "課題A"})   # 課題A は既存、課題B は新規
+        monkeypatch.setattr(etb, "BacklogClient", lambda *a, **kw: instance)
+        self._tty(monkeypatch)
+        asked = {"n": 0}
+
+        def count(_):
+            asked["n"] += 1
+            return "y"
+
+        monkeypatch.setattr("builtins.input", count)
+        workspace.write(sources=[{
+            "name": "タスク管理表",
+            "excel": {"path": str(next(workspace.dir.glob("*.xlsx")))},
+            "issue_mapping": {"issue_type": "タスク", "priority": "中",
+                              "summary_col": "件名", "due_date_col": "Backlog番号"},
+            "upsert": {"enabled": True, "match_summary": True},
+        }])
+
+        main_with("--config", str(workspace.config), "--execute")
+
+        assert asked["n"] == 1                     # 新規作成の 1 件だけ
+        assert instance.create_calls == 1
+        assert len(instance.updates) == 1
+
+    def test_案内文に更新は確認しない旨が出る(self, workspace, backlog, monkeypatch, capsys):
+        self._tty(monkeypatch)
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+
+        main_with("--config", str(workspace.config), "--execute")
+
+        assert "更新は確認せず実行します" in capsys.readouterr().out

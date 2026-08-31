@@ -798,13 +798,18 @@ class ConfirmationDeclined(Exception):
 
 class RowConfirmer:
     """
-    1 行ずつ書き込みの可否を確認する。
+    新規作成の可否を 1 件ずつ確認する。
 
     まとめて一気に書き込むと、件数が多いときに何が起きたのか把握しきれない。
-    作成・更新のどちらも、実行前に内容を見て判断できるようにする。
+    課題が増えるのは新規作成のときだけなので、そこに確認を集約する。
+
+    既存課題の更新は確認せずに実行する。内容が既存と同じ行は
+    plan_row() の時点で「変更なし」と判定されており、確認に出てくるのは
+    実際に変わる行だけだが、更新は件数が多くなりやすく、都度の確認が
+    かえって判断を鈍らせるため。
 
     選択肢:
-        y  この行を実行する
+        y  この行を作成する
         n  この行を飛ばす（スキップとして計上）
         a  以降はすべて確認せず実行する
         q  ここで実行を中止する
@@ -828,16 +833,18 @@ class RowConfirmer:
         if self.assume_all:
             return True
 
-        action = (
-            f"更新 → {plan.existing_key}" if plan.action == "update" else "新規作成"
-        )
-        print(f"\n  [{plan.row_number}] {action}")
+        # 更新は確認しない。課題が増えるのは新規作成のときだけであり、
+        # 更新まで都度確認すると件数が多くなって判断が鈍る。
+        if plan.action == "update":
+            return True
+
+        print(f"\n  [{plan.row_number}] 新規作成")
         print(mapper.format_plan(plan, master_labels=self.master_labels))
 
         while True:
             try:
                 answer = input(
-                    "    実行しますか？ [y=実行 / n=スキップ / a=以降すべて / q=中止]: "
+                    "    作成しますか？ [y=作成 / n=スキップ / a=以降すべて / q=中止]: "
                 ).strip().lower()
             except (EOFError, OSError):
                 # 非対話環境。本来は main() が事前に弾いているが、
@@ -918,7 +925,7 @@ def confirm_run(
             "非対話環境では確認を求められません。実行するには --yes を付けてください。"
         )
 
-    print("  この後、1 件ずつ内容を確認します。")
+    print("  この後、新規作成のみ 1 件ずつ確認します（更新は確認せず実行します）。")
 
 
 # ------------------------------------------------------------------
@@ -1337,11 +1344,10 @@ def process_source(
             # まとめて一気に書き込むと、件数が多いときに何が起きたのか
             # 把握しきれないため、作成・更新のどちらも都度確認する。
             if confirmer is not None and not confirmer.confirm(plan, mapper):
-                label = "更新" if existing_key else "新規作成"
-                print(f"  [{i}] — スキップ（{label}を見送り）: {plan.summary}")
+                print(f"  [{i}] — スキップ（新規作成を見送り）: {plan.summary}")
                 counts["skipped"] += 1
                 log(row=i, action="skipped", summary=plan.summary,
-                    detail=f"{label}を見送り")
+                    detail="新規作成を見送り")
                 api_called = False
                 continue
 
