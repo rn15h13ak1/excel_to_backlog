@@ -756,37 +756,51 @@ class IssueMapper:
 
         return params
 
-    def format_plan(self, plan) -> str:
+    def format_plan(
+        self,
+        plan,
+        master_labels: dict | None = None,
+        indent: str = "         ",
+        description_lines: int = 3,
+    ) -> str:
         """
-        ドライラン用に RowPlan の内容を人間が読める形で返す。
+        RowPlan の内容を人間が読める形で返す。ドライラン表示と実行前の
+        1 件ずつの確認で共用する。
 
-        format_preview() と同じ項目を出す。以前あった format_dry_run() は
-        statusId と startDate を表示しておらず、プレビューとドライランで
-        見える情報が食い違っていたため、この関数に統合して置き換えた。
+        master_labels を渡すと、担当者・ステータスを ID ではなく名前で表示する
+        （build_master_labels() の戻り値）。確認画面では ID を見せても判断
+        できないため、名前を出す。
         """
         params = plan.params
-        lines = [f"         件名: {params.get('summary', '（なし）')}"]
+        labels = master_labels or {}
+        lines = [f"{indent}件名: {params.get('summary', '（なし）')}"]
 
-        if "description" in params:
-            desc_lines = params["description"].splitlines()
-            for dl in desc_lines[:3]:
-                lines.append(f"         {dl}")
-            if len(desc_lines) > 3:
-                lines.append("         ...")
+        if description_lines and "description" in params:
+            desc = params["description"].splitlines()
+            for dl in desc[:description_lines]:
+                lines.append(f"{indent}{dl}")
+            if len(desc) > description_lines:
+                lines.append(f"{indent}...")
 
-        for key, label in (
-            ("startDate", "開始日"), ("dueDate", "期限日"),
-            ("assigneeId", "担当者ID"), ("statusId", "ステータスID"),
-        ):
-            if key in params:
-                lines.append(f"         {label}: {params[key]}")
+        def named(key: str, group: str) -> str:
+            value = params[key]
+            return str(labels.get(group, {}).get(value, value))
+
+        if "startDate" in params:
+            lines.append(f"{indent}開始日: {params['startDate']}")
+        if "dueDate" in params:
+            lines.append(f"{indent}期限日: {params['dueDate']}")
+        if "assigneeId" in params:
+            lines.append(f"{indent}担当者: {named('assigneeId', 'user')}")
+        if "statusId" in params:
+            lines.append(f"{indent}ステータス: {named('statusId', 'status')}")
 
         for k, v in params.items():
             if k.startswith("customField_"):
-                lines.append(f"         {k}: {v}")
+                lines.append(f"{indent}{k}: {v}")
 
         for warning in plan.warnings:
-            lines.append(f"         ⚠ {warning}")
+            lines.append(f"{indent}⚠ {warning}")
 
         return "\n".join(lines)
 

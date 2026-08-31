@@ -694,7 +694,70 @@ def create_issue_with_status(client: BacklogClient, params: dict) -> dict:
 # ------------------------------------------------------------------
 
 class ConfirmationDeclined(Exception):
-    """ユーザーが実行前の確認で「いいえ」を選んだ。"""
+    """ユーザーが確認で実行を取りやめた。"""
+
+
+class RowConfirmer:
+    """
+    1 行ずつ書き込みの可否を確認する。
+
+    まとめて一気に書き込むと、件数が多いときに何が起きたのか把握しきれない。
+    作成・更新のどちらも、実行前に内容を見て判断できるようにする。
+
+    選択肢:
+        y  この行を実行する
+        n  この行を飛ばす（スキップとして計上）
+        a  以降はすべて確認せず実行する
+        q  ここで実行を中止する
+
+    assume_yes=True（--yes）のときは一切確認しない。cron やパイプ経由で
+    使う場合に必要。
+    """
+
+    def __init__(self, assume_yes: bool = False, master_labels: dict | None = None):
+        self.assume_all = assume_yes
+        self.master_labels = master_labels or {}
+
+    def confirm(self, plan, mapper: IssueMapper) -> bool:
+        """
+        実行してよければ True、飛ばすなら False を返す。
+
+        Raises
+        ------
+        ConfirmationDeclined : ユーザーが中止（q）を選んだ場合
+        """
+        if self.assume_all:
+            return True
+
+        action = (
+            f"更新 → {plan.existing_key}" if plan.action == "update" else "新規作成"
+        )
+        print(f"\n  [{plan.row_number}] {action}")
+        print(mapper.format_plan(plan, master_labels=self.master_labels))
+
+        while True:
+            try:
+                answer = input(
+                    "    実行しますか？ [y=実行 / n=スキップ / a=以降すべて / q=中止]: "
+                ).strip().lower()
+            except (EOFError, OSError):
+                # 非対話環境。本来は main() が事前に弾いているが、
+                # 途中で標準入力が閉じられた場合に無限ループしないよう中止する。
+                raise ConfirmationDeclined(
+                    "確認の入力を受け取れませんでした。--yes を付けて実行してください。"
+                ) from None
+
+            if answer in ("y", "yes"):
+                return True
+            if answer in ("n", "no", ""):
+                return False
+            if answer in ("a", "all"):
+                self.assume_all = True
+                print("    → 以降は確認せずに実行します。")
+                return True
+            if answer in ("q", "quit"):
+                raise ConfirmationDeclined("ユーザーが実行を中止しました。")
+            print("    y / n / a / q のいずれかを入力してください。")
 
 
 def confirm_run(
@@ -704,7 +767,10 @@ def confirm_run(
     planned: dict | None = None,
 ) -> None:
     """
-    Backlog への書き込みを始める前に、一度だけ確認を求める。
+    Backlog への書き込みを始める前に、全体の見込みを表示する。
+
+    件数の内訳を示したうえで、実際の可否は 1 行ずつ RowConfirmer が確認する
+    （ここで重ねて聞くと二重の確認になるため、この関数は表示のみ）。
 
     以前は行ごとに新規作成の確認を出していたが、以下の問題があった:
       - 200 行あれば 200 回の入力が必要で、実質「全部 y」しか選べない
@@ -742,22 +808,18 @@ def confirm_run(
     print()
 
     if assume_yes:
-        print("  --yes が指定されているため確認をスキップします。")
+        print("  --yes が指定されているため、確認せずに実行します。")
         return
 
-    try:
-        answer = input("  実行しますか？ [y/N]: ").strip().lower()
-    except (EOFError, OSError):
-        # 非対話環境で黙ってスキップすると「成功したように見える無処理」に
-        # なるため、明示的にエラーとして止める。
-        # パイプ経由の入力は EOFError、stdin が存在しない環境（cron・
-        # デーモン等）では OSError になるため両方を捕捉する。
+    if not sys.stdin.isatty():
+        # 非対話環境で黙って進めると、確認を求められないまま
+        # 全件スキップして「成功したように見える無処理」になる。
+        # cron やパイプ経由で使う場合は --yes を明示させる。
         raise ConfirmationDeclined(
             "非対話環境では確認を求められません。実行するには --yes を付けてください。"
-        ) from None
+        )
 
-    if answer not in ("y", "yes"):
-        raise ConfirmationDeclined("ユーザーが実行を取り消しました。")
+    print("  この後、1 件ずつ内容を確認します。")
 
 
 # ------------------------------------------------------------------
@@ -984,6 +1046,7 @@ def process_source(
     summary_index: SummaryIndex | None = None,
     counts: dict | None = None,
     limit: int | None = None,
+    confirmer: RowConfirmer | None = None,
 ) -> dict:
     """
     1つのソース（Excel ファイル）を処理して作成・更新件数を返す。
@@ -993,6 +1056,8 @@ def process_source(
     limit : int | None
         処理する行数の上限。初回に少数だけ試すために使う。
         フィルター適用後の先頭から数える。
+    confirmer : RowConfirmer | None
+        1 行ずつ書き込みの可否を確認する。省略時は確認しない。
     counts : dict | None
         集計を積む辞書。呼び出し元が渡した辞書をその場で更新するため、
         途中で例外が送出されてもそこまでの集計が呼び出し元に残る。
@@ -1130,6 +1195,18 @@ def process_source(
                 # ときにログが痩せ、次の再開で作成済みの行が再作成される。
                 log(row=i, action="resumed", summary=plan.summary)
                 api_called = False          # 照合より前に判定するため通信していない
+                continue
+
+            # 書き込む直前に 1 行ずつ確認する。
+            # まとめて一気に書き込むと、件数が多いときに何が起きたのか
+            # 把握しきれないため、作成・更新のどちらも都度確認する。
+            if confirmer is not None and not confirmer.confirm(plan, mapper):
+                label = "更新" if existing_key else "新規作成"
+                print(f"  [{i}] — スキップ（{label}を見送り）: {plan.summary}")
+                counts["skipped"] += 1
+                log(row=i, action="skipped", summary=plan.summary,
+                    detail=f"{label}を見送り")
+                api_called = False
                 continue
 
             if existing_key:
@@ -1440,6 +1517,12 @@ def main():
     with ExitStack() as stack:
         run_log = stack.enter_context(RunLog(log_path)) if log_path else None
         try:
+            # 実行時は 1 行ずつ確認する（ドライランでは確認しない）
+            confirmer = (
+                None if dry_run
+                else RowConfirmer(assume_yes=args.yes,
+                                  master_labels=build_master_labels(master))
+            )
             for source_cfg in sources_cfg:
                 # total を直接渡す。ソースの途中で中断しても、それまでの
                 # 集計が total に残りサマリーに反映される。
@@ -1447,8 +1530,10 @@ def main():
                     source_cfg, client, master, dry_run=dry_run,
                     run_log=run_log, completed=completed,
                     summary_index=summary_index, counts=total,
-                    limit=args.limit,
+                    limit=args.limit, confirmer=confirmer,
                 )
+        except ConfirmationDeclined as e:
+            interrupted = str(e)
         except KeyboardInterrupt:
             interrupted = "ユーザーによる中断（Ctrl-C）"
         except BacklogAPIError as e:

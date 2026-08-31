@@ -155,19 +155,51 @@ class TestConfirmation:
         assert backlog.create_calls == 0
         assert "--yes" in capsys.readouterr().err
 
-    def test_確認で_n_を選ぶと中止する(self, workspace, backlog, monkeypatch, capsys):
+    def test_1件ずつ確認して_y_なら実行する(self, workspace, backlog, monkeypatch):
+        monkeypatch.setattr("sys.stdin", type("T", (), {"isatty": lambda s: True})())
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+
+        main_with("--config", str(workspace.config), "--execute")
+
+        assert backlog.create_calls == 2      # 2 行とも確認して実行
+
+    def test_1件ずつ確認して_n_なら飛ばす(self, workspace, backlog, monkeypatch, capsys):
+        monkeypatch.setattr("sys.stdin", type("T", (), {"isatty": lambda s: True})())
         monkeypatch.setattr("builtins.input", lambda _: "n")
+
+        main_with("--config", str(workspace.config), "--execute")
+
+        assert backlog.create_calls == 0
+        assert "スキップ: 2 件" in capsys.readouterr().out
+
+    def test_確認で_q_を選ぶと中止しサマリーを出す(
+        self, workspace, backlog, monkeypatch, capsys
+    ):
+        monkeypatch.setattr("sys.stdin", type("T", (), {"isatty": lambda s: True})())
+        answers = iter(["y", "q"])
+        monkeypatch.setattr("builtins.input", lambda _: next(answers))
 
         code = main_with("--config", str(workspace.config), "--execute")
 
         assert code == 1
-        assert backlog.create_calls == 0
-        assert "取り消しました" in capsys.readouterr().err
+        assert backlog.create_calls == 1      # 1 件目だけ実行
+        out = capsys.readouterr().out
+        assert "処理中断" in out
+        assert "作成: 1 件" in out
 
-    def test_確認で_y_を選ぶと実行する(self, workspace, backlog, monkeypatch):
-        monkeypatch.setattr("builtins.input", lambda _: "y")
+    def test_確認で_a_を選ぶと以降は確認しない(self, workspace, backlog, monkeypatch):
+        monkeypatch.setattr("sys.stdin", type("T", (), {"isatty": lambda s: True})())
+        calls = {"n": 0}
+
+        def once(_):
+            calls["n"] += 1
+            return "a"
+
+        monkeypatch.setattr("builtins.input", once)
         main_with("--config", str(workspace.config), "--execute")
+
         assert backlog.create_calls == 2
+        assert calls["n"] == 1                # 2 行目は聞かれない
 
     def test_ドライランでは確認を求めない(self, workspace, backlog, monkeypatch):
         def no_input(_):
