@@ -303,3 +303,89 @@ class TestRepeatedKeyValue:
 
         assert body.count("# 項番") == 1
         assert "1\n\n1" not in body
+
+
+class TestJoinSpec:
+    """
+    判定に使う列（required_cols）以外の連結の仕様。
+
+    値が空の行は区切りを入れずに飛ばす。区切りを無条件に挟むと、
+    2 行目以降に値が無い列で空行だけが増えていく。
+    """
+
+    def _value(self, source_cfg, master, rows, column="備考"):
+        cfg = cfg_for(
+            source_cfg, ["項番", "件名", "対応内容", "備考"], rows,
+            required_cols=["項番", "件名"],
+            description_cols=["対応内容", "備考"],
+        )
+        return etb.load_source(cfg, master).rows[0][column]
+
+    def test_継続行の値が空なら区切りを入れない(self, source_cfg, master):
+        got = self._value(source_cfg, master, [
+            [1, "A", "手順1", "メモ1"], [1, "", "手順2", ""], [1, "", "手順3", ""],
+        ])
+        assert got == "メモ1"
+
+    def test_途中の行だけ値がある場合(self, source_cfg, master):
+        got = self._value(source_cfg, master, [
+            [1, "A", "手順1", ""], [1, "", "手順2", "途中のメモ"], [1, "", "手順3", ""],
+        ])
+        assert got == "途中のメモ"
+
+    def test_先頭が空で継続行に値がある場合(self, source_cfg, master):
+        """先頭に区切りが付かないこと。"""
+        got = self._value(source_cfg, master, [
+            [1, "A", "手順1", ""], [1, "", "手順2", "後から追記"],
+        ])
+        assert got == "後から追記"
+
+    def test_すべて空なら空のまま(self, source_cfg, master):
+        got = self._value(source_cfg, master, [
+            [1, "A", "手順1", ""], [1, "", "手順2", ""],
+        ])
+        assert got == ""
+
+    def test_空白だけの値も飛ばす(self, source_cfg, master):
+        got = self._value(source_cfg, master, [
+            [1, "A", "手順1", ""], [1, "", "   ", ""], [1, "", "手順3", ""],
+        ], column="対応内容")
+        assert got == "手順1\n\n手順3"
+
+    def test_値は前後の空白を除いて連結する(self, source_cfg, master):
+        """セル内の末尾改行が余分な空行にならないこと。"""
+        got = self._value(source_cfg, master, [
+            [1, "A", "手順1\n", ""], [1, "", "手順2", ""],
+        ], column="対応内容")
+        assert got == "手順1\n\n手順2"
+
+
+class TestNoExcessBlankLines:
+    """本文に 3 連続以上の改行が現れないこと。"""
+
+    def _body(self, source_cfg, master, rows):
+        cfg = cfg_for(
+            source_cfg, ["項番", "件名", "対応内容"], rows,
+            required_cols=["項番", "件名"], description_cols=["対応内容"],
+        )
+        loaded = etb.load_source(cfg, master)
+        return etb.plan_row(loaded.rows[0], cfg, loaded.mapper).params["description"]
+
+    def test_継続行が空でも空行が増えない(self, source_cfg, master):
+        body = self._body(source_cfg, master, [
+            [1, "A", "手順1"], [1, "", ""], [1, "", "手順3"],
+        ])
+        assert "\n\n\n" not in body
+        assert "手順1\n\n手順3" in body
+
+    def test_セル内に空行があっても増えない(self, source_cfg, master):
+        body = self._body(source_cfg, master, [
+            [1, "A", "手順1\n\n注記"], [1, "", "手順2"],
+        ])
+        assert "\n\n\n" not in body
+
+    def test_セル内の末尾改行でも増えない(self, source_cfg, master):
+        body = self._body(source_cfg, master, [
+            [1, "A", "手順1\n"], [1, "", "手順2"],
+        ])
+        assert "\n\n\n" not in body
