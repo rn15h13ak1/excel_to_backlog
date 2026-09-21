@@ -13,8 +13,13 @@ __pycache__/
 venv/
 *.egg-info/
 
-# macOS
+# OS / エディタ
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
 
 # テスト用 Excel
 *.xlsx
@@ -36,6 +41,20 @@ mutants/
 
 # Claude Code の作業用ディレクトリ（git worktree を含む）
 .claude/
+
+# 資格情報
+# config.yaml は名指しで除外しているが、それ以外の置き場も塞いでおく。
+# 一度コミットすると Git 履歴から消すのが難しいため。
+.env
+.env.*
+secrets.yaml
+credentials*
+*.pem
+*.key
+*.local.yaml
+
+# mac-watcher のトリガー（.build-trigger 等）は、本リポジトリでは
+# watcher を使っていないため定型から省いている。
 
 # プレビュー・実行ログの出力先
 output/

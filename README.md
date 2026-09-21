@@ -219,7 +219,7 @@ excel-to-backlog --config config.yaml --execute --output-dir /var/log/backlog
 相対パスは**設定ファイルのある場所**からの相対です。実行時のカレントディレクトリで出力先が変わると、同じコマンドでもどこに出たか分からなくなるためです。出力先は実行時のヘッダーにも表示されます。
 
 ```
-出力先      : /Users/you/work/output
+出力先      : /work/tasks/output
 ```
 
 ### 実行結果の読み方
@@ -315,7 +315,7 @@ sources:
 
 ```yaml
 excel:
-  path: 'C:\Users\username\Documents\task_list.xlsx'
+  path: 'C:\work\task_list.xlsx'
   sheet: "Sheet1"        # シート名（省略時: 最初のシート）
   header_start_row: 1    # ヘッダー開始行（1始まり）
   header_end_row: 1      # ヘッダー終了行（複数行ヘッダーの場合に end > start）
@@ -329,8 +329,8 @@ excel:
 バックスラッシュはYAMLのエスケープ文字のため、以下のいずれかで記述します。
 
 ```yaml
-path: 'C:\Users\username\Documents\task.xlsx'   # シングルクォート（推奨）
-path: "C:/Users/username/Documents/task.xlsx"   # スラッシュ区切り
+path: 'C:\work\task.xlsx'   # シングルクォート（推奨）
+path: "C:/work/task.xlsx"   # スラッシュ区切り
 ```
 
 **複数行ヘッダーについて**

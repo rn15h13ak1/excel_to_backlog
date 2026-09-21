@@ -17,7 +17,7 @@ sources:
   - name: "タスク管理表"
 
     excel:
-      path: "tasks.xlsx"      # Windows は 'C:\Users\...\tasks.xlsx' のようにシングルクォートで
+      path: "tasks.xlsx"      # Windows は 'C:\work\tasks.xlsx' のようにシングルクォートで
       # sheet: "Sheet1"       # 省略時は最初のシート
       header_start_row: 1
       data_start_row: 2
