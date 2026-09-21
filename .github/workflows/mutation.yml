@@ -25,7 +25,8 @@ jobs:
           cache: pip
 
       - name: 依存関係をインストール
-        run: pip install -e ".[dev]" mutmut
+        # mutmut は pyproject の dev に含まれている
+        run: pip install -e ".[dev]"
 
       - name: 変異テストを実行
         # 生存した変異体があっても失敗させない。
@@ -35,9 +36,10 @@ jobs:
 
       - name: 生存した変異体を一覧表示
         run: |
+          mutmut results > mutmut-results.txt 2>&1 || true
           echo "## 生存した変異体" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          mutmut results >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          cat mutmut-results.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: 結果を保存する
@@ -45,5 +47,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mutmut-results
-          path: .mutmut-cache
-          if-no-files-found: ignore
+          # mutmut 3 は mutants/ に出力する（2.x の .mutmut-cache は作られない）。
+          # mutants/ 全体はソースの複製で大きいため、要る 2 つだけ残す。
+          path: |
+            mutmut-results.txt
+            mutants/mutmut-stats.json
+          # 1 つも見つからなければ失敗させる。以前は ignore で、置き場が変わった
+          # ことに気づかないまま毎週「成功」しつつ何も保存していなかった。
+          if-no-files-found: error
