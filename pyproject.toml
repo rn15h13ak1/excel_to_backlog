@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=64"]
+# license / license-files を SPDX 文字列で書くには 77 以降が要る（PEP 639）
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +8,8 @@ name = "excel-to-backlog"
 version = "0.7.0"
 description = "Excel ファイルから Backlog の課題を一括登録・更新する CLI ツール"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 
 dependencies = [
     # 3.1 以降で openpyxl.cell.rich_text が利用できる。
