@@ -10,6 +10,7 @@ urlopen を差し替えて、実際に送信される URL とボディを検証�
 """
 
 import json
+import ssl
 import urllib.parse
 import urllib.request
 
@@ -34,6 +35,7 @@ def captured(monkeypatch):
     class Captured:
         requests = []
         responses = [{"id": 1}]
+        contexts = []          # urlopen に渡された ssl_context
 
         @property
         def last(self):
@@ -55,9 +57,11 @@ def captured(monkeypatch):
 
     cap = Captured()
     cap.requests = []
+    cap.contexts = []
 
     def fake_urlopen(req, timeout=None, context=None):
         cap.requests.append(req)
+        cap.contexts.append(context)
         payload = cap.responses[min(len(cap.requests) - 1, len(cap.responses) - 1)]
 
         class _Res:
@@ -186,6 +190,37 @@ class TestGetIssue:
     def test_issueKey_は_URL_エンコードされる(self, client, captured):
         client.get_issue("DEMO-1")
         assert "/issues/DEMO-1" in captured.last.full_url
+
+
+class TestSslVerify:
+    """
+    TLS 証明書の検証。
+
+    既定は検証する。オンプレ版のために `ssl_verify: false` で外せるが、
+    これは明示したときだけであること。
+
+    既定を false 側へ倒す変更は、テストが無いと素通りする。カバレッジでも
+    気づけない（検証を外す枝が実行されるぶん、むしろ数字は上がる）。
+    """
+
+    def test_既定では検証する(self, client, captured):
+        assert client.ssl_context is None          # urlopen の既定＝検証あり
+        client.get_issue("DEMO-1")
+        assert captured.contexts == [None]
+
+    def test_ssl_verify_を_false_にしたときだけ検証を外す(self, captured):
+        client = BacklogClient("example.backlog.com", "k", ssl_verify=False)
+        client.get_issue("DEMO-1")
+
+        ctx = captured.contexts[-1]
+        assert ctx is not None
+        assert ctx.verify_mode is ssl.CERT_NONE
+        assert ctx.check_hostname is False
+
+    def test_ssl_verify_を_true_にしても検証が外れない(self, captured):
+        client = BacklogClient("example.backlog.com", "k", ssl_verify=True)
+        client.get_issue("DEMO-1")
+        assert captured.contexts[-1] is None
 
 
 class TestGetIssuesPagination:

@@ -540,6 +540,40 @@ class TestConfirmCreateOnly:
         assert "更新は確認せず実行します" in capsys.readouterr().out
 
 
+class TestSslVerifyDefault:
+    """
+    設定に ssl_verify を書かなかったときは検証する。
+
+    既定値は excel_to_backlog 側（backlog_cfg.get("ssl_verify", True)）と
+    BacklogClient 側の二箇所にある。どちらを false 側へ倒しても、
+    証明書の検証が黙って無効になる。
+    """
+
+    def _ssl_verify_arg(self, workspace, monkeypatch, **backlog):
+        seen = {}
+
+        def capture(*args, **kwargs):
+            seen.update(kwargs)
+            return FakeBacklog()
+
+        monkeypatch.setattr(etb, "BacklogClient", capture)
+        cfg = {"space_host": "demo.backlog.com", "api_key": "k",
+               "project_key": "DEMO", **backlog}
+        workspace.write(backlog=cfg)
+
+        main_with("--config", str(workspace.config))
+        return seen["ssl_verify"]
+
+    def test_省略時は検証する(self, workspace, monkeypatch):
+        assert self._ssl_verify_arg(workspace, monkeypatch) is True
+
+    def test_false_を明示したときだけ外れる(self, workspace, monkeypatch):
+        assert self._ssl_verify_arg(workspace, monkeypatch, ssl_verify=False) is False
+
+    def test_true_を明示しても検証する(self, workspace, monkeypatch):
+        assert self._ssl_verify_arg(workspace, monkeypatch, ssl_verify=True) is True
+
+
 class TestOutputDir:
     """
     プレビューと実行ログは output/ に出す。設定ファイルと同じ場所に出すと
