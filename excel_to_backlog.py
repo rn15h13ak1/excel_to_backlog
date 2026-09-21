@@ -40,20 +40,47 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-import yaml
+# import するモジュール名と、pip に渡すパッケージ名は一致しない（yaml → pyyaml）。
+# 案内に module 名をそのまま出すと、入らないコマンドを示すことになる。
+_PACKAGE_OF = {"yaml": "pyyaml", "openpyxl": "openpyxl"}
 
-from backlog_client import BacklogAPIError, BacklogClient, BacklogNoChangeError
-from config_validation import validate_config_keys
-from excel_reader import ExcelReader, col_letter_to_index
-from mapper import BacklogMaster, IssueMapper
-from row_merge import (
-    continuation_groups,
-    merge_by_groups,
-    merge_continuation_rows,
-    single_value_columns,
-)
-from run_log import RunLog, completion_key, default_log_path, load_completed
-from summary_index import SummaryIndex
+try:
+    import yaml
+
+    from backlog_client import BacklogAPIError, BacklogClient, BacklogNoChangeError
+    from config_validation import validate_config_keys
+    from excel_reader import ExcelReader, col_letter_to_index
+    from mapper import BacklogMaster, IssueMapper
+    from row_merge import (
+        continuation_groups,
+        merge_by_groups,
+        merge_continuation_rows,
+        single_value_columns,
+    )
+    from run_log import RunLog, completion_key, default_log_path, load_completed
+    from summary_index import SummaryIndex
+except ModuleNotFoundError as e:
+    # 依存の入っていない Python で起動されたとき、トレースバックではなく
+    # 何を入れればよいかを示す。内部のファイル名と行番号が並ぶだけでは、
+    # ライブラリの問題なのかどうかも読み取れない。
+    #
+    # 自前モジュールの綴り間違いまで「ライブラリを入れてください」と案内すると
+    # 本当の原因が隠れるため、知っている依存以外はそのまま送出する。
+    if e.name not in _PACKAGE_OF:
+        raise
+    print(
+        f"\n  ⚠ 必要なライブラリ「{_PACKAGE_OF[e.name]}」が入っていません。\n"
+        f"    実行中の Python: {sys.executable}\n"
+        f"    リポジトリ直下で次を実行してください:\n"
+        f"        pip install -e .\n"
+        f"    入れたのに直らない場合、入れた先と動かしている先が違います。\n"
+        f"    仮想環境を使ってください:\n"
+        f"        python3 -m venv .venv && source .venv/bin/activate",
+        file=sys.stderr,
+    )
+    # 終了コードは既存の対応表に合わせる。1 は「1件以上のエラー、中断、
+    # または実行環境・設定の不備」で、新しい番号は足さない。
+    sys.exit(1)
 
 
 # ------------------------------------------------------------------

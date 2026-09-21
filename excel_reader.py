@@ -22,18 +22,21 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
+import openpyxl
+from openpyxl.utils import column_index_from_string
+
+# 取り消し線の読み取りに使う。openpyxl 3.1 より前には無いため、
+# 無ければ機能だけ落として動かす（read_with_format が警告を出す）。
 try:
-    import openpyxl
-    from openpyxl.utils import column_index_from_string
-    try:
-        from openpyxl.cell.rich_text import CellRichText, TextBlock
-        _RICH_TEXT_AVAILABLE = True
-    except ImportError:
-        _RICH_TEXT_AVAILABLE = False
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    _RICH_TEXT_AVAILABLE = True
 except ImportError:
-    raise ImportError(
-        "openpyxl が必要です。`pip install openpyxl` を実行してください。"
-    )
+    _RICH_TEXT_AVAILABLE = False
+
+# openpyxl が無い場合は ModuleNotFoundError をそのまま通す。
+# 以前はここで素の ImportError に変換していたが、型と .name が失われるため
+# 入口（excel_to_backlog.py）の案内に届かず、トレースバックのまま落ちていた。
+# 案内は入口の 1 箇所に集約する。
 
 
 # ------------------------------------------------------------------
