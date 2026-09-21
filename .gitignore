@@ -1,9 +1,7 @@
-# 設定ファイル（APIキーを含むため除外）
+# 設定ファイル（API キーを含むため除外）
+# config.sample.yaml / config.minimal.yaml は別名でこの行にマッチしないため、
+# 打ち消しの指定は要らない。どちらも資格情報を含まないので追跡する。
 config.yaml
-
-# サンプル設定はコミット対象
-!config.sample.yaml
-!config.minimal.yaml
 
 # Python
 __pycache__/
