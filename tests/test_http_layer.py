@@ -278,3 +278,86 @@ class TestMasterEndpoints:
     def test_正しいエンドポイントを呼ぶ(self, client, captured, call, expected):
         call(client)
         assert expected in captured.last.full_url
+
+
+# ------------------------------------------------------------------
+# --debug の出力
+# ------------------------------------------------------------------
+
+class TestDebugOutput:
+    """
+    --debug はカスタム属性が反映されたかを確かめるための機能で、README でも
+    そう案内している。出力そのものに検証が無かった。
+
+    とくに GET は、クエリから apiKey を除いてから出している。この除去が
+    落ちると API キーが stderr に出て、貼り付けたログから漏れる。
+    """
+
+    KEY = "key/with+chars"
+
+    @pytest.fixture
+    def debug_client(self):
+        return BacklogClient("example.backlog.com", self.KEY, debug=True)
+
+    def _err(self, capsys):
+        return capsys.readouterr().err
+
+    def test_debug_を付けなければ何も出ない(self, client, captured, capsys):
+        client.get_issue("DEMO-1")
+        client.create_issue({"summary": "件名"})
+        assert self._err(capsys) == ""
+
+    def test_GET_の出力に_apiKey_が含まれない(self, debug_client, captured, capsys):
+        debug_client.get_issues(42)
+
+        err = self._err(capsys)
+        assert "[DEBUG GET] /issues" in err
+        assert "apiKey" not in err
+        assert self.KEY not in err
+        assert urllib.parse.quote(self.KEY, safe="") not in err
+
+    def test_GET_の他のパラメータは出る(self, debug_client, captured, capsys):
+        debug_client.get_issues(42)
+
+        err = self._err(capsys)
+        assert "projectId" in err and "count=100" in err
+
+    def test_POST_はボディの項目を出す(self, debug_client, captured, capsys):
+        debug_client.create_issue({"summary": "件名", "categoryId": [1, 2]})
+
+        err = self._err(capsys)
+        assert "[DEBUG POST] /issues" in err
+        assert "summary=件名" in err
+        assert "categoryId[]=1" in err and "categoryId[]=2" in err
+        assert self.KEY not in err            # apiKey は URL 側。ボディには出ない
+
+    def test_PATCH_はボディの項目を出す(self, debug_client, captured, capsys):
+        debug_client.update_issue("DEMO-1", {"summary": "新しい件名"})
+
+        err = self._err(capsys)
+        assert "[DEBUG PATCH] /issues/DEMO-1" in err
+        assert "summary=新しい件名" in err
+        assert self.KEY not in err
+
+    def test_レスポンスのカスタム属性を出す(self, debug_client, captured, capsys):
+        captured.responses = [{
+            "id": 1,
+            "customFields": [{"id": 7, "name": "分類", "value": "不具合"}],
+        }]
+        debug_client.create_issue({"summary": "件名"})
+
+        err = self._err(capsys)
+        assert "[DEBUG POST response] customFields:" in err
+        assert "id=7" in err and "'分類'" in err and "'不具合'" in err
+
+    def test_カスタム属性が空ならその旨を出す(self, debug_client, captured, capsys):
+        captured.responses = [{"id": 1, "customFields": []}]
+        debug_client.create_issue({"summary": "件名"})
+
+        assert "customFields: (なし または 空)" in self._err(capsys)
+
+    def test_カスタム属性のキーが無い場合も落ちない(self, debug_client, captured, capsys):
+        captured.responses = [{"id": 1}]
+        debug_client.create_issue({"summary": "件名"})
+
+        assert "customFields: (なし または 空)" in self._err(capsys)
