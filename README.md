@@ -903,3 +903,9 @@ mutmut show <名前>  # その変異の内容を表示
 
 [CHANGELOG.md](CHANGELOG.md) を参照。バージョンはコミット履歴から
 さかのぼって付けたもので、タグは打っていません。
+
+---
+
+## ライセンス
+
+MIT License。全文は [LICENSE](LICENSE) にあります。
